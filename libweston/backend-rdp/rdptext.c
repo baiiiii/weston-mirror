@@ -769,7 +769,7 @@ rdptext_update_edit_focus(struct rdptext_state *t)
 	bool active = false;
 	struct weston_surface *surface = NULL;
 
-	if (t->bridge_api && t->integration_enabled && t->registered &&
+	if (t->bridge_api && t->integration_enabled &&
 	    (t->peer_ctx->item.flags & RDP_PEER_ACTIVATED))
 		active = t->bridge_api->get_active(t->peer_ctx->rdpBackend->compositor,
 						   &surface);
