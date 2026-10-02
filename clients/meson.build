@@ -177,6 +177,8 @@ endif
 executable(
 	'weston-text-input-test', [
 		'text-input-test.c',
+		xdg_shell_client_protocol_h,
+		xdg_shell_protocol_c,
 		text_input_unstable_v3_client_protocol_h,
 		text_input_unstable_v3_protocol_c,
 	],
