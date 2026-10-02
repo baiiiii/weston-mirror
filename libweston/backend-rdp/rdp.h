@@ -396,8 +396,7 @@ void rdp_drdynvc_destroy(RdpPeerContext *context);
 int rdp_rdptext_init(freerdp_peer *client);
 void rdp_rdptext_process(RdpPeerContext *context);
 void rdp_rdptext_destroy(RdpPeerContext *context);
-void rdptext_notify_commit(struct rdp_backend *b, const char *utf8,
-			   uint32_t replace_begin, int32_t replace_end);
+bool rdp_rdptext_suppress_legacy_keys(RdpPeerContext *context);
 
 // rdpdisp.c
 bool

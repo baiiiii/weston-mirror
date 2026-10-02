@@ -1618,6 +1618,12 @@ xf_input_keyboard_event(rdpInput *input, UINT16 flags, UINT16 code)
 	if (!(peerContext->item.flags & RDP_PEER_ACTIVATED))
 		return TRUE;
 
+	/* With MS-RDPETXT integration active, the client may deliver keys
+	 * through both the legacy channel and the TextInput DVC; opt-in
+	 * suppression avoids double input (WESTON_RDPETXT_SUPPRESS_LEGACY_KEYS=1). */
+	if (rdp_rdptext_suppress_legacy_keys(peerContext))
+		return TRUE;
+
 	if (flags & KBD_FLAGS_DOWN) {
 		keyState = WL_KEYBOARD_KEY_STATE_PRESSED;
 		notify = 1;

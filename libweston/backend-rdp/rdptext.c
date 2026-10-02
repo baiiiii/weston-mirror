@@ -6,33 +6,43 @@
  *
  * Enables the host-side Windows IME (e.g. Microsoft Pinyin running inside
  * msrdc.exe) to compose text and inject the committed string into the
- * focused Wayland surface, mirroring what WSA does for Android.
+ * focused Wayland surface, mirroring what WSA does for Android.  The
+ * client side is msrdc's built-in "remotetextplugin" (in mstscax.dll),
+ * enabled by the RDP file property "redirecttextprocessing:i:1".
  *
  * Transport: two dynamic virtual channels opened by this server via
  * WTSVirtualChannelOpenEx(WTS_CHANNEL_OPTION_DYNAMIC):
- *   - "TextInput_ServerToClientDVC": server -> client (version notify, ...)
- *   - "TextInput_ClientToServerDVC": client -> server (key/text/composition)
+ *   - "TextInput_ServerToClientDVC": server -> client
+ *   - "TextInput_ClientToServerDVC": client -> server
  *
- * Handshake sequence (MS-RDPETXT section 3.1.4 / 3.2.4):
+ * Handshake sequence (MS-RDPETXT section 1.7 / 3.1.5):
  *
- *   weston                                msrdc.exe
+ *   weston                                   msrdc.exe
  *     |-- DYNVC CREATE "TextInput_...S2C" -->|
  *     |-- DYNVC CREATE "TextInput_...C2S" -->|
- *     |<-- CREATE_RESPONSE (join) ----------|   (dvc_open_state SUCCEEDED)
+ *     |<-- CREATE_RESPONSE (join) -----------|   (dvc_open_state SUCCEEDED)
  *     |-- NOTIFY_SERVER_VERSION 0x031A ----->|
  *     |<-- NOTIFY_CLIENT_VERSION 0x0604 -----|
- *     |<-- UPDATE_TEXT 0x0200 / 0x0201 ------|   (committed strings)
+ *     |-- REGISTER_REMOTE_* / HOST_* ------->|   (one text target, one
+ *     |                                         key target, one edit ctl)
+ *     |<-> EDIT_CONTROL_FOCUS on activation -|
+ *     |<-- UPDATE_COMPOSITION (preedit) -----|
+ *     |<-- UPDATE_TEXT / SET_COMPOSITION_INFO  (commit)
+ *     |<-- KEY_EVENT (unconsumed keys) ------|
  *
  * IMPORTANT: WTSVirtualChannelWrite() on a DVC does NOT buffer until the
  * client confirms the channel: libfreerdp sends the DYNVC DATA PDU
  * synchronously as soon as drdynvc is READY. Data written before the
- * CREATE_RESPONSE arrives would reach an unknown channelId, so the version
- * PDU is only sent after WTSVirtualChannelQuery(WTSVirtualChannelReady)
- * reports the channel open (same pattern as FreeRDP's audin/rdpsnd server).
+ * CREATE_RESPONSE arrives would reach an unknown channelId, so PDUs are
+ * only sent after WTSVirtualChannelQuery(WTSVirtualChannelReady) reports
+ * both channels open (same pattern as FreeRDP's audin/rdpsnd server).
  *
  * Every PDU is preceded by a 6-byte header:
- *   size  (4 bytes, UINT32 LE): payload size, excluding the size field itself
+ *   size  (4 bytes, UINT32 LE): size of the PDU excluding this field,
+ *         i.e. 2 + payload length
  *   pduId (2 bytes, UINT16 LE)
+ *
+ * Text is UTF-16LE on the wire; converted to/from UTF-8 for Wayland.
  */
 
 #include <config.h>
@@ -46,6 +56,10 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/channels/wtsvc.h>
 
+#include <libweston/libweston.h>
+#include <libweston/plugin-registry.h>
+#include <libweston/text-input-bridge.h>
+
 #include "rdp.h"
 
 #define RDPTXT_CHANNEL_S2C "TextInput_ServerToClientDVC"
@@ -56,38 +70,109 @@
 #define RDPTXT_VERSION_MINOR 0
 
 /* Give the client ~10 s to confirm both DYNVC CREATEs before assuming it
- * has no TextInput plugin (process() is pumped once per frame). */
+ * has no TextInput plugin (process() is pumped once per VCM wake). */
 #define RDPTXT_READY_TIMEOUT_TICKS 600
 
-/* Sanity limit for UPDATE_TEXT payloads: 64k UTF-16 units is far beyond
- * anything an IME should commit in a single update. */
+/* Sanity limits: a single IME operation is never this large. */
 #define RDPTXT_MAX_TEXT_UNITS 65536
+#define RDPTXT_MAX_CLAUSES 64
+#define RDPTXT_MAX_KEYSTATS 1024
+#define RDPTXT_MAX_PDU_SIZE (1024 * 1024)
+
+/* Fixed object ids used on this connection. The client only needs the ids
+ * to be consistent between registration and focus/content PDUs. */
+#define RDPTXT_TEXT_TARGET_ID 1  /* TextInputClient (text target) */
+#define RDPTXT_HOST_ID 1         /* TextInputHost (key target) */
+#define RDPTXT_EDIT_CONTROL_ID 1 /* the (single) virtual edit control */
+
+/* window type "Legacy": a traditional Win32 window, which is what the
+ * client's InputService expects for a RAIL server app */
+#define RDPTXT_HOST_TYPE_LEGACY 3
 
 /* PDU identifiers, MS-RDPETXT section 2.2.2 */
 #define RDPTXT_PDU_KEY_EVENT                       0x0100
+#define RDPTXT_PDU_ACKNOWLEDGE_HOST_OPERATION      0x0101
 #define RDPTXT_PDU_CHARACTER_EVENT                 0x0102
 #define RDPTXT_PDU_ENABLE_WINDOW                   0x0105
 #define RDPTXT_PDU_UPDATE_TEXT                     0x0200
 #define RDPTXT_PDU_UPDATE_TEXT_AND_SELECTION       0x0201
+#define RDPTXT_PDU_SET_SELECTION                   0x0202
+#define RDPTXT_PDU_UPDATE_FORMAT                   0x0203
 #define RDPTXT_PDU_UPDATE_COMPOSITION              0x0204
 #define RDPTXT_PDU_SET_COMPOSITION_INFO            0x0205
+#define RDPTXT_PDU_RECONVERSION_CANDIDATES         0x0206
+#define RDPTXT_PDU_ACKNOWLEDGE_OPERATION           0x020B
+#define RDPTXT_PDU_ERROR_REPORT                    0x020C
+#define RDPTXT_PDU_REGISTER_REMOTE_TEXT_TARGET     0x0300
+#define RDPTXT_PDU_REGISTER_REMOTE_KEY_TARGET      0x0301
+#define RDPTXT_PDU_REGISTER_REMOTE_EDIT_CONTROL    0x0302
+#define RDPTXT_PDU_UNREGISTER_REMOTE_EDIT_CONTROL  0x0306
 #define RDPTXT_PDU_EDIT_CONTROL_FOCUS              0x0308
 #define RDPTXT_PDU_HOST_FOCUS                      0x0309
+#define RDPTXT_PDU_HOST_FOREGROUND                 0x030A
+#define RDPTXT_PDU_SELECTION_CHANGED               0x030B
+#define RDPTXT_PDU_TEXT_CHANGED                    0x030C
 #define RDPTXT_PDU_NOTIFY_SERVER_VERSION           0x031A
+#define RDPTXT_PDU_ACKNOWLEDGE_REMOTE_OPERATION    0x0312
+#define RDPTXT_PDU_ACKNOWLEDGE_KEY_EVENT           0x0313
+#define RDPTXT_PDU_REMOTE_TEXT_TARGET_THREAD_PROPS 0x0322
+#define RDPTXT_PDU_REMOTE_INTEGRATION_STATUS       0x0602
+#define RDPTXT_PDU_REREGISTRATION_REQUEST          0x0603
 #define RDPTXT_PDU_NOTIFY_CLIENT_VERSION           0x0604
 #define RDPTXT_PDU_REPORT_CLIENT_OPTIONS           0x0605
+
+/* RDPTXT_UPDATE_COMPOSITION_PDU compositionAction values */
+#define RDPTXT_COMPOSITION_ENTER  0x01
+#define RDPTXT_COMPOSITION_LEAVE  0x02
+#define RDPTXT_COMPOSITION_UPDATE 0x03
+
+/* RDPTXT_KEY_EVENT_PDU routingStage values */
+#define RDPTXT_KEY_ROUTING_NONE 0x02
+
+/* KeyEventHostInfo EventFlags */
+#define RDPTXT_KEY_FLAG_DOWN 0x0001
+#define RDPTXT_KEY_FLAG_UP   0x0004
+
+/* TextInputAcknowledgementType for RDPTXT_ACKNOWLEDGE_KEY_EVENT_PDU */
+#define RDPTXT_KEY_ACK_COMPLETED 0x00000001
 
 struct rdptext_state {
 	RdpPeerContext *peer_ctx;
 	HANDLE s2c_channel;   /* server -> client */
 	HANDLE c2s_channel;   /* client -> server */
 	DWORD session_id;     /* real session id for WTSVirtualChannelOpenEx */
+
 	bool version_sent;
+	bool client_version_received;
 	bool ready_failed;    /* CREATE confirmation timed out */
 	uint32_t ready_ticks;
 	uint32_t client_version_major;
 	uint32_t client_version_minor;
+
+	bool registered;      /* registration PDUs sent */
+	bool integration_enabled; /* REMOTE_INTEGRATION_STATUS from client */
+	bool window_input_enabled; /* ENABLE_WINDOW for our host id */
+	bool focus_notified;  /* an edit control currently has focus */
+	struct weston_surface *focused_surface;
+
+	uint32_t host_focus_ordinal;
+
+	/* IME state assembled from client PDUs */
+	bool composition_active;
+	bool skip_identical_update_text;
+	char *pending_commit;   /* SET_COMPOSITION_INFO determinedText */
+	char *last_commit_text; /* last text we committed, for dedup */
+
+	/* text-input bridge (zwp_text_input_v3, compositor/text-input-bridge.c) */
+	const struct weston_text_input_bridge_api *bridge_api;
+	bool bridge_listener_attached;
+
+	bool verbose;
 };
+
+/* ------------------------------------------------------------------ */
+/* Logging                                                             */
+/* ------------------------------------------------------------------ */
 
 static void
 rdptext_log(struct rdptext_state *t, const char *fmt, ...)
@@ -98,11 +183,21 @@ rdptext_log(struct rdptext_state *t, const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
+
+	/* weston_log lands in the always-on "log" scope, which the WSLg
+	 * daemon collects into wlog.log - vital for first-time debugging. */
+	(void)t;
 	weston_log("rdptext: %s\n", buf);
 }
 
+#define rdptext_verbose(t, ...) \
+	do { \
+		if ((t) && (t)->verbose) \
+			rdptext_log(t, __VA_ARGS__); \
+	} while (0)
+
 /* ------------------------------------------------------------------ */
-/* UTF-16LE -> UTF-8 (with surrogate pairs)                            */
+/* UTF-16LE <-> UTF-8                                                  */
 /* ------------------------------------------------------------------ */
 
 static char *
@@ -148,34 +243,54 @@ rdptext_utf16_to_utf8(const UINT16 *wstr, size_t wchars)
 	return (char *)buf;
 }
 
-/* ------------------------------------------------------------------ */
-/* Commit injection (MVP: log only; see rdptext_notify_commit)         */
-/* ------------------------------------------------------------------ */
-
-/*
- * Injection pipeline, implemented incrementally:
- *
- *   MS-RDPETXT UPDATE_TEXT  ->  UTF-8 string  ->  focused surface
- *
- *   Step 1 (this commit): log the committed string, so channel-level
- *                         behaviour can be verified end-to-end.
- *   Step 2 (planned):     port upstream weston text-input-v3 compositor
- *                         support and call commit_string() on the
- *                         focused surface's text-input object.
- *   Step 3 (planned):     route UPDATE_COMPOSITION as preedit_string().
- */
-void
-rdptext_notify_commit(struct rdp_backend *b, const char *utf8,
-		      uint32_t replace_begin, int32_t replace_end)
+static UINT16 *
+rdptext_utf8_to_utf16(const char *utf8, size_t *out_wchars)
 {
-	if (!utf8 || !*utf8)
-		return;
+	unsigned char *s = (unsigned char *)utf8;
+	UINT16 *buf;
+	size_t len = strlen(utf8);
+	size_t i = 0, out = 0;
 
-	weston_log("rdptext: commit [%u,%d): \"%s\"\n",
-		   replace_begin, replace_end, utf8);
+	buf = malloc((len + 1) * sizeof(UINT16));
+	if (!buf)
+		return NULL;
 
-	/* TODO(step 2): forward to weston text-input-v3 once merged. */
-	(void)b;
+	while (i < len) {
+		uint32_t cp;
+		unsigned char c = s[i];
+
+		if (c < 0x80) {
+			cp = c;
+			i += 1;
+		} else if ((c & 0xE0) == 0xC0 && i + 1 < len) {
+			cp = ((c & 0x1F) << 6) | (s[i + 1] & 0x3F);
+			i += 2;
+		} else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+			cp = ((c & 0x0F) << 12) | ((s[i + 1] & 0x3F) << 6) |
+			     (s[i + 2] & 0x3F);
+			i += 3;
+		} else if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+			cp = ((c & 0x07) << 18) | ((s[i + 1] & 0x3F) << 12) |
+			     ((s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+			i += 4;
+		} else {
+			cp = 0xFFFD;
+			i += 1;
+		}
+
+		if (cp >= 0x10000) {
+			cp -= 0x10000;
+			buf[out++] = 0xD800 | (cp >> 10);
+			buf[out++] = 0xDC00 | (cp & 0x3FF);
+		} else {
+			buf[out++] = (UINT16)cp;
+		}
+	}
+
+	buf[out] = 0;
+	if (out_wchars)
+		*out_wchars = out;
+	return buf;
 }
 
 /* ------------------------------------------------------------------ */
@@ -206,7 +321,7 @@ rdptext_channel_is_ready(HANDLE channel)
 }
 
 /* ------------------------------------------------------------------ */
-/* PDU send / parse                                                    */
+/* PDU send                                                            */
 /* ------------------------------------------------------------------ */
 
 static BOOL
@@ -230,10 +345,21 @@ rdptext_send_pdu(struct rdptext_state *t, HANDLE channel, UINT16 pdu_id,
 	ret = WTSVirtualChannelWrite(channel, (PCHAR)Stream_Buffer(s),
 				     Stream_GetPosition(s), &written);
 	Stream_Free(s, TRUE);
+
+	if (!ret)
+		rdptext_log(t, "failed to send PDU 0x%04X", pdu_id);
+
 	return ret;
 }
 
 static BOOL
+rdptext_s2c_ok(struct rdptext_state *t)
+{
+	return t->integration_enabled && t->window_input_enabled &&
+	       t->s2c_channel;
+}
+
+static void
 rdptext_send_server_version(struct rdptext_state *t)
 {
 	wStream *payload;
@@ -247,7 +373,7 @@ rdptext_send_server_version(struct rdptext_state *t)
 	 */
 	payload = Stream_New(NULL, 24);
 	if (!payload)
-		return FALSE;
+		return;
 
 	Stream_Write(payload, zeros, sizeof(zeros));
 	Stream_Write_UINT32(payload, RDPTXT_VERSION_MAJOR);
@@ -260,9 +386,476 @@ rdptext_send_server_version(struct rdptext_state *t)
 
 	rdptext_log(t, "sent NOTIFY_SERVER_VERSION %u.%u (ret=%d)",
 		    RDPTXT_VERSION_MAJOR, RDPTXT_VERSION_MINOR, ret);
-	return ret;
 }
 
+/* REGISTER_REMOTE_TEXT_TARGET_PDU: textTargetId (4 bytes) */
+static void
+rdptext_send_register_text_target(struct rdptext_state *t)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 4);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+
+	rdptext_send_pdu(t, t->s2c_channel,
+			 RDPTXT_PDU_REGISTER_REMOTE_TEXT_TARGET,
+			 Stream_Buffer(s), 4);
+	Stream_Free(s, TRUE);
+}
+
+/* REGISTER_REMOTE_KEY_TARGET_PDU:
+ *   objectId (4), textTargetId (4), textInputHostSettings (7),
+ *   viewInstanceId (8), windowInstanceId (8)
+ */
+static void
+rdptext_send_register_key_target(struct rdptext_state *t)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 31);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, RDPTXT_HOST_ID);
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+	/* TextInputHostSettings: Type (4), InputEnabledOnWindowByApp (1),
+	 * IsOwnerWin32 (1), IsOwnerAppFrame (1) */
+	Stream_Write_UINT32(s, RDPTXT_HOST_TYPE_LEGACY);
+	Stream_Write_UINT8(s, 1); /* input enabled on window by app */
+	Stream_Write_UINT8(s, 1); /* owner is a Win32 window */
+	Stream_Write_UINT8(s, 0); /* not an application frame */
+	Stream_Write_UINT64(s, 1); /* viewInstanceId */
+	Stream_Write_UINT64(s, 1); /* windowInstanceId */
+
+	rdptext_send_pdu(t, t->s2c_channel,
+			 RDPTXT_PDU_REGISTER_REMOTE_KEY_TARGET,
+			 Stream_Buffer(s), 31);
+	Stream_Free(s, TRUE);
+}
+
+/* REGISTER_REMOTE_EDIT_CONTROL_PDU:
+ *   appNameLength (4), appName (UTF-16), editClientOperationId (4),
+ *   editControlId (4), textInputClientId (4)
+ */
+static void
+rdptext_send_register_edit_control(struct rdptext_state *t)
+{
+	wStream *s;
+	UINT16 *app_name;
+	size_t name_wchars = 0;
+	UINT32 payload_len;
+	static const char app_name_utf8[] = "weston";
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	app_name = rdptext_utf8_to_utf16(app_name_utf8, &name_wchars);
+	if (!app_name)
+		return;
+
+	payload_len = 4 + (UINT32)(name_wchars * 2) + 12;
+
+	s = Stream_New(NULL, payload_len);
+	if (!s) {
+		free(app_name);
+		return;
+	}
+
+	Stream_Write_UINT32(s, (UINT32)name_wchars);
+	Stream_Write(s, app_name, name_wchars * 2);
+	Stream_Write_UINT32(s, ++t->host_focus_ordinal); /* editClientOperationId */
+	Stream_Write_UINT32(s, RDPTXT_EDIT_CONTROL_ID);
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+
+	rdptext_send_pdu(t, t->s2c_channel,
+			 RDPTXT_PDU_REGISTER_REMOTE_EDIT_CONTROL,
+			 Stream_Buffer(s), payload_len);
+	Stream_Free(s, TRUE);
+	free(app_name);
+}
+
+/* REMOTE_TEXT_TARGET_THREAD_PROPERTIES_PDU:
+ *   textInputClientId (4), threadProperties (4)
+ */
+static void
+rdptext_send_thread_properties(struct rdptext_state *t)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 8);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+	Stream_Write_UINT32(s, 0x00000001); /* IsWin32App */
+
+	rdptext_send_pdu(t, t->s2c_channel,
+			 RDPTXT_PDU_REMOTE_TEXT_TARGET_THREAD_PROPS,
+			 Stream_Buffer(s), 8);
+	Stream_Free(s, TRUE);
+}
+
+/* HOST_FOREGROUND_PDU: objectId (4), windowInstanceId (8) */
+static void
+rdptext_send_host_foreground(struct rdptext_state *t)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 12);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, RDPTXT_HOST_ID);
+	Stream_Write_UINT64(s, 1);
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_HOST_FOREGROUND,
+			 Stream_Buffer(s), 12);
+	Stream_Free(s, TRUE);
+}
+
+/* HOST_FOCUS_PDU: textInputHostId (4), ordinal (4), gainingFocus (1),
+ * override (1) */
+static void
+rdptext_send_host_focus(struct rdptext_state *t, bool gaining)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 10);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, RDPTXT_HOST_ID);
+	Stream_Write_UINT32(s, ++t->host_focus_ordinal);
+	Stream_Write_UINT8(s, gaining ? 1 : 0);
+	Stream_Write_UINT8(s, 0); /* override */
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_HOST_FOCUS,
+			 Stream_Buffer(s), 10);
+	Stream_Free(s, TRUE);
+}
+
+/* Map the focused surface's text cursor rectangle from weston surface
+ * coordinates into RDP client desktop coordinates. Returns false when the
+ * rectangle is unknown. */
+static bool
+rdptext_get_cursor_bounds(struct rdptext_state *t, struct weston_surface *surface,
+			  pixman_box32_t *bounds)
+{
+	struct rdp_backend *b = t->peer_ctx->rdpBackend;
+	struct weston_view *view, *iter;
+	struct weston_output *output;
+	int32_t x, y, w, h;
+	float gx1, gy1, gx2, gy2;
+
+	if (!t->bridge_api ||
+	    !t->bridge_api->get_cursor_rect(b->compositor, &x, &y, &w, &h))
+		return false;
+	if (w <= 0 || h <= 0)
+		return false;
+
+	/* the surface's primary view maps surface-local to global */
+	output = rdp_output_get_primary(b->compositor);
+	view = NULL;
+	wl_list_for_each(iter, &surface->views, surface_link) {
+		if (iter->output) {
+			view = iter;
+			output = iter->output;
+			break;
+		}
+	}
+	if (!view || !output)
+		return false;
+
+	weston_view_to_global_float(view, (float)x, (float)y, &gx1, &gy1);
+	weston_view_to_global_float(view, (float)(x + w), (float)(y + h),
+				    &gx2, &gy2);
+
+	bounds->x1 = (int32_t)gx1;
+	bounds->y1 = (int32_t)gy1;
+	bounds->x2 = (int32_t)gx2;
+	bounds->y2 = (int32_t)gy2;
+
+	to_client_coordinate(t->peer_ctx, output,
+			     &bounds->x1, &bounds->y1, NULL, NULL);
+	to_client_coordinate(t->peer_ctx, output,
+			     &bounds->x2, &bounds->y2, NULL, NULL);
+
+	return true;
+}
+
+/* EDIT_CONTROL_FOCUS_PDU:
+ *   textInputClientId (4), controlBounds (16 TextInputRect),
+ *   editInfo (36 EditControlInfo), gainingFocus (1),
+ *   losingFocusControlId (4), losingFocusTextInputHostId (4),
+ *   override (1)
+ */
+static void
+rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
+				struct weston_surface *surface)
+{
+	wStream *s;
+	pixman_box32_t bounds;
+	bool have_bounds = false;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 66);
+	if (!s)
+		return;
+
+	if (gaining && surface)
+		have_bounds = rdptext_get_cursor_bounds(t, surface, &bounds);
+
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+	if (have_bounds) {
+		Stream_Write_UINT32(s, (UINT32)bounds.x1); /* left */
+		Stream_Write_UINT32(s, (UINT32)bounds.y1); /* top */
+		Stream_Write_UINT32(s, (UINT32)bounds.x2); /* right */
+		Stream_Write_UINT32(s, (UINT32)bounds.y2); /* bottom */
+	} else {
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+	}
+
+	/* EditControlInfo (36 bytes):
+	 *   bufferLength (4) -1 = unlimited
+	 *   editSettings (4)
+	 *   frameworkType (4) Default
+	 *   frameworkVersion (4)
+	 *   id (4)
+	 *   inputScope (4) IS_DEFAULT
+	 *   inputSettings (4)
+	 *   visualReferenceId (8)
+	 */
+	Stream_Write_UINT32(s, 0xFFFFFFFF);
+	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT32(s, RDPTXT_EDIT_CONTROL_ID);
+	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT64(s, 0);
+
+	Stream_Write_UINT8(s, gaining ? 1 : 0);
+	Stream_Write_UINT32(s, 0); /* losingFocusControlId */
+	Stream_Write_UINT32(s, 0); /* losingFocusTextInputHostId */
+	Stream_Write_UINT8(s, 0);  /* override */
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_EDIT_CONTROL_FOCUS,
+			 Stream_Buffer(s), 66);
+	Stream_Free(s, TRUE);
+
+	rdptext_log(t, "EDIT_CONTROL_FOCUS %s bounds:%d",
+		    gaining ? "gained" : "lost", have_bounds);
+}
+
+/* ACKNOWLEDGE_REMOTE_OPERATION_PDU (server -> client):
+ *   textInputClientId (4), editControlId (4), operationId (4),
+ *   errorCode (4)
+ */
+static void
+rdptext_send_ack_remote_operation(struct rdptext_state *t,
+				  UINT32 text_input_client_id,
+				  UINT32 edit_control_id,
+				  UINT32 operation_id, UINT32 error_code)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 16);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, text_input_client_id);
+	Stream_Write_UINT32(s, edit_control_id);
+	Stream_Write_UINT32(s, operation_id);
+	Stream_Write_UINT32(s, error_code);
+
+	rdptext_send_pdu(t, t->s2c_channel,
+			 RDPTXT_PDU_ACKNOWLEDGE_REMOTE_OPERATION,
+			 Stream_Buffer(s), 16);
+	Stream_Free(s, TRUE);
+	rdptext_verbose(t, "acked remote operation %u (err %u)",
+			operation_id, error_code);
+}
+
+/* ACKNOWLEDGE_KEY_EVENT_PDU (server -> client):
+ *   textInputHostId (4), keyEventId (4), acknowledgementType (4)
+ */
+static void
+rdptext_send_ack_key_event(struct rdptext_state *t, UINT32 text_input_host_id,
+			   UINT32 key_event_id)
+{
+	wStream *s;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 12);
+	if (!s)
+		return;
+	Stream_Write_UINT32(s, text_input_host_id);
+	Stream_Write_UINT32(s, key_event_id);
+	Stream_Write_UINT32(s, RDPTXT_KEY_ACK_COMPLETED);
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_ACKNOWLEDGE_KEY_EVENT,
+			 Stream_Buffer(s), 12);
+	Stream_Free(s, TRUE);
+}
+
+/* ------------------------------------------------------------------ */
+/* Registration / focus notifications                                  */
+/* ------------------------------------------------------------------ */
+
+static void
+rdptext_send_registrations(struct rdptext_state *t)
+{
+	if (!rdptext_s2c_ok(t) || t->registered)
+		return;
+
+	rdptext_send_register_text_target(t);
+	rdptext_send_register_key_target(t);
+	rdptext_send_register_edit_control(t);
+	rdptext_send_thread_properties(t);
+	rdptext_send_host_foreground(t);
+	rdptext_send_host_focus(t, true);
+
+	t->registered = true;
+	rdptext_log(t, "registered text target/key target/edit control");
+}
+
+/* Re-evaluate whether an IME-enabled client is focused, and mirror the
+ * transition to msrdc via EDIT_CONTROL_FOCUS. Called from the bridge state
+ * listener and after the peer becomes active. */
+static void
+rdptext_update_edit_focus(struct rdptext_state *t)
+{
+	bool active = false;
+	struct weston_surface *surface = NULL;
+
+	if (t->bridge_api && t->integration_enabled && t->registered &&
+	    (t->peer_ctx->item.flags & RDP_PEER_ACTIVATED))
+		active = t->bridge_api->get_active(t->peer_ctx->rdpBackend->compositor,
+						   &surface);
+
+	if (active == t->focus_notified &&
+	    (!active || surface == t->focused_surface))
+		return;
+
+	if (t->focus_notified)
+		rdptext_send_edit_control_focus(t, false, NULL);
+
+	if (active) {
+		rdptext_send_edit_control_focus(t, true, surface);
+		rdptext_log(t, "edit control focused: surface %p",
+			    (void *)surface);
+	}
+
+	t->focus_notified = active;
+	t->focused_surface = active ? surface : NULL;
+}
+
+static void
+rdptext_bridge_state_cb(bool active, struct weston_surface *surface,
+			void *user_data)
+{
+	struct rdptext_state *t = user_data;
+
+	rdptext_verbose(t, "bridge state: active=%d surface=%p",
+			active, (void *)surface);
+	rdptext_update_edit_focus(t);
+}
+
+/* ------------------------------------------------------------------ */
+/* Composition / commit injection                                      */
+/* ------------------------------------------------------------------ */
+
+static void
+rdptext_record_commit(struct rdptext_state *t, const char *utf8)
+{
+	char *dup;
+
+	dup = strdup(utf8);
+	if (!dup)
+		return;
+
+	free(t->last_commit_text);
+	t->last_commit_text = dup;
+}
+
+static void
+rdptext_commit_text(struct rdptext_state *t, const char *utf8)
+{
+	struct rdp_backend *b = t->peer_ctx->rdpBackend;
+
+	if (!utf8 || !*utf8)
+		return;
+
+	if (!t->bridge_api) {
+		rdptext_log(t, "commit (no bridge, not injected): \"%s\"", utf8);
+		return;
+	}
+
+	rdptext_log(t, "commit: \"%s\"", utf8);
+
+	t->bridge_api->send_commit(b->compositor, utf8);
+	rdptext_record_commit(t, utf8);
+}
+
+static void
+rdptext_flush_pending_commit(struct rdptext_state *t)
+{
+	if (!t->pending_commit)
+		return;
+
+	rdptext_commit_text(t, t->pending_commit);
+	free(t->pending_commit);
+	t->pending_commit = NULL;
+
+	/* clients that follow SET_COMPOSITION_INFO with an identical
+	 * UPDATE_TEXT must not commit twice */
+	t->skip_identical_update_text = true;
+}
+
+static void
+rdptext_set_preedit(struct rdptext_state *t, const char *utf8)
+{
+	struct rdp_backend *b = t->peer_ctx->rdpBackend;
+
+	if (!t->bridge_api)
+		return;
+
+	t->bridge_api->send_preedit(b->compositor, utf8, -1, -1);
+	rdptext_verbose(t, "preedit: \"%s\"", utf8 ? utf8 : "");
+}
+
+/* ------------------------------------------------------------------ */
+/* PDU parse: content updates from the client                          */
+/* ------------------------------------------------------------------ */
+
+/* UPDATE_TEXT / UPDATE_TEXT_AND_SELECTION:
+ *   textInputClientId (4), editControlId (4), textInputHostId (4),
+ *   operationId (4), replaceBegin (4), replaceEnd (4),
+ *   newTextLength (4), newText (UTF-16)
+ *   [UPDATE_TEXT_AND_SELECTION: selectionBegin (4), selectionEnd (4)]
+ */
 static void
 rdptext_handle_update_text(struct rdptext_state *t, UINT16 pdu_id,
 			   wStream *s)
@@ -273,6 +866,7 @@ rdptext_handle_update_text(struct rdptext_state *t, UINT16 pdu_id,
 	char *utf8;
 
 	(void)pdu_id;
+	(void)host_id;
 
 	if (Stream_GetRemainingLength(s) < 28)
 		return;
@@ -286,31 +880,488 @@ rdptext_handle_update_text(struct rdptext_state *t, UINT16 pdu_id,
 	Stream_Read_UINT32(s, text_len);
 
 	if (text_len > RDPTXT_MAX_TEXT_UNITS ||
-	    Stream_GetRemainingLength(s) < (UINT64)text_len * 2)
+	    Stream_GetRemainingLength(s) < (UINT64)text_len * 2) {
+		rdptext_log(t, "UPDATE_TEXT: bad text length %u", text_len);
 		return;
+	}
 
-	/* UPDATE_TEXT_AND_SELECTION carries selectionBegin/selectionEnd
-	 * after the text; we ignore it for commit purposes. */
-	utf8 = rdptext_utf16_to_utf8((const UINT16 *)Stream_Pointer(s), text_len);
+	utf8 = rdptext_utf16_to_utf8((const UINT16 *)Stream_Pointer(s),
+				     text_len);
+	Stream_Seek(s, text_len * 2);
 	if (!utf8)
 		return;
 
-	rdptext_notify_commit(t->peer_ctx->rdpBackend, utf8,
-			      replace_begin, (int32_t)replace_end);
+	rdptext_verbose(t, "UPDATE_TEXT op=%u [%u,%d): \"%s\"",
+			operation_id, replace_begin, (int32_t)replace_end,
+			utf8);
+
+	/* weston text-input inserts at the caret; the replacement range is
+	 * not representable, so just commit the new text. */
+	if (t->skip_identical_update_text && t->last_commit_text &&
+	    strcmp(t->last_commit_text, utf8) == 0) {
+		rdptext_verbose(t, "UPDATE_TEXT: duplicate of the determined "
+				"text just committed, skipped");
+	} else {
+		rdptext_commit_text(t, utf8);
+	}
+	t->skip_identical_update_text = false;
+
+	free(t->pending_commit);
+	t->pending_commit = NULL;
 	free(utf8);
+
+	rdptext_send_ack_remote_operation(t, client_id, control_id,
+					  operation_id, 0);
 }
+
+/* UPDATE_COMPOSITION:
+ *   textInputClientId (4), editControlId (4), textInputHostId (4),
+ *   operationId (4), compositionAction (1), clausesCount (4),
+ *   clauses: { preConversionStringLen (4), preConversionString (UTF-16),
+ *              range (8) } *
+ */
+static void
+rdptext_handle_update_composition(struct rdptext_state *t, wStream *s)
+{
+	UINT32 client_id, control_id, host_id, operation_id;
+	UINT8 composition_action;
+	UINT32 clauses_count, i;
+	wStream *composition;
+	char *utf8;
+
+	if (Stream_GetRemainingLength(s) < 21)
+		return;
+
+	Stream_Read_UINT32(s, client_id);
+	Stream_Read_UINT32(s, control_id);
+	Stream_Read_UINT32(s, host_id);
+	Stream_Read_UINT32(s, operation_id);
+	Stream_Read_UINT8(s, composition_action);
+	Stream_Read_UINT32(s, clauses_count);
+
+	rdptext_verbose(t, "UPDATE_COMPOSITION op=%u action=%u clauses=%u",
+			operation_id, composition_action, clauses_count);
+
+	if (clauses_count > RDPTXT_MAX_CLAUSES) {
+		rdptext_log(t, "UPDATE_COMPOSITION: too many clauses (%u)",
+			    clauses_count);
+		return;
+	}
+
+	/* Reassemble the composition string from the clauses. The clause
+	 * ranges carry formatting information which plain preedit cannot
+	 * express, so the strings are simply concatenated in PDU order. */
+	composition = Stream_New(NULL, 256);
+	if (!composition)
+		return;
+
+	for (i = 0; i < clauses_count; i++) {
+		UINT32 clause_len;
+
+		if (Stream_GetRemainingLength(s) < 4)
+			goto out;
+
+		Stream_Read_UINT32(s, clause_len);
+		if (clause_len > RDPTXT_MAX_TEXT_UNITS ||
+		    Stream_GetRemainingLength(s) < (UINT64)clause_len * 2 + 8)
+			goto out;
+
+		utf8 = rdptext_utf16_to_utf8((const UINT16 *)Stream_Pointer(s),
+					     clause_len);
+		Stream_Seek(s, clause_len * 2);
+		Stream_Seek(s, 8); /* EditControlRange */
+
+		if (utf8 && *utf8) {
+			if (!Stream_EnsureRemainingCapacity(composition,
+							    strlen(utf8) + 1))
+				goto out;
+			Stream_Write(composition, utf8, strlen(utf8));
+		}
+		free(utf8);
+	}
+
+	if (!Stream_EnsureRemainingCapacity(composition, 1))
+		goto out;
+	Stream_Write(composition, "", 1);
+
+	utf8 = (char *)Stream_Buffer(composition);
+
+	switch (composition_action) {
+	case RDPTXT_COMPOSITION_ENTER:
+	case RDPTXT_COMPOSITION_UPDATE:
+		t->composition_active = true;
+		t->skip_identical_update_text = false;
+		rdptext_set_preedit(t, utf8);
+		break;
+	case RDPTXT_COMPOSITION_LEAVE:
+		t->composition_active = false;
+		/* the determined text (if any) replaces the composition */
+		rdptext_flush_pending_commit(t);
+		rdptext_set_preedit(t, "");
+		break;
+	default:
+		rdptext_log(t, "UPDATE_COMPOSITION: unknown action %u",
+			    composition_action);
+		break;
+	}
+
+out:
+	Stream_Free(composition, TRUE);
+
+	/* the server must acknowledge composition start and end */
+	if (composition_action == RDPTXT_COMPOSITION_ENTER ||
+	    composition_action == RDPTXT_COMPOSITION_LEAVE)
+		rdptext_send_ack_remote_operation(t, client_id, control_id,
+						  operation_id, 0);
+}
+
+/* SET_COMPOSITION_INFO:
+ *   textInputClientId (4), editControlId (4), textInputHostId (4),
+ *   operationId (4), compositionRange (8), determinedTextLength (4),
+ *   determinedText (UTF-16)
+ */
+static void
+rdptext_handle_set_composition_info(struct rdptext_state *t, wStream *s)
+{
+	UINT32 text_len;
+	char *utf8;
+
+	if (Stream_GetRemainingLength(s) < 28)
+		return;
+
+	Stream_Seek(s, 16); /* ids + operationId */
+	Stream_Seek(s, 8);  /* compositionRange */
+	Stream_Read_UINT32(s, text_len);
+
+	if (text_len > RDPTXT_MAX_TEXT_UNITS ||
+	    Stream_GetRemainingLength(s) < (UINT64)text_len * 2)
+		return;
+
+	utf8 = rdptext_utf16_to_utf8((const UINT16 *)Stream_Pointer(s),
+				     text_len);
+	if (!utf8)
+		return;
+
+	rdptext_verbose(t, "SET_COMPOSITION_INFO: determined \"%s\"", utf8);
+
+	/* The determined text replaces the composition when the
+	 * composition ends; stash it and let UPDATE_COMPOSITION(Leave)
+	 * flush it. Some clients send it without ending the composition,
+	 * in which case the text is already final - commit it right away
+	 * (the UPDATE_TEXT dedup guard catches double delivery). */
+	free(t->pending_commit);
+	t->pending_commit = utf8;
+
+	if (!t->composition_active)
+		rdptext_flush_pending_commit(t);
+}
+
+/* KeyEventHostInfo (44 bytes):
+ *   ModifierFlags (2), EventFlags (2), EventFlags2 (4), VirtualKey (2),
+ *   Character (2), TranslationFlags (2), DeviceId (8), RepeatCount (2),
+ *   ScanCode (2), IsExtendedKey (1), IsMenuKey (1), WasKeyDown (1),
+ *   IsKeyReleased (1), TimestampInMs (4), MessageId (4),
+ *   KeyEventAttributes (6)
+ */
+struct rdptext_key_event_info {
+	UINT16 modifier_flags;
+	UINT16 event_flags;
+	UINT16 virtual_key;
+	UINT16 character;
+	UINT16 repeat_count;
+	UINT16 scan_code;
+	UINT8 is_extended_key;
+	UINT8 was_key_down;
+	UINT8 is_key_released;
+};
+
+static BOOL
+rdptext_read_key_event_info(wStream *s, struct rdptext_key_event_info *info)
+{
+	UINT32 event_flags2;
+
+	(void)event_flags2;
+
+	if (Stream_GetRemainingLength(s) < 44)
+		return FALSE;
+
+	Stream_Read_UINT16(s, info->modifier_flags);
+	Stream_Read_UINT16(s, info->event_flags);
+	Stream_Read_UINT32(s, event_flags2);
+	Stream_Read_UINT16(s, info->virtual_key);
+	Stream_Read_UINT16(s, info->character);
+	Stream_Seek(s, 2); /* TranslationFlags */
+	Stream_Seek(s, 8); /* DeviceId */
+	Stream_Read_UINT16(s, info->repeat_count);
+	Stream_Read_UINT16(s, info->scan_code);
+	Stream_Read_UINT8(s, info->is_extended_key);
+	Stream_Seek(s, 1); /* IsMenuKey */
+	Stream_Read_UINT8(s, info->was_key_down);
+	Stream_Read_UINT8(s, info->is_key_released);
+	Stream_Seek(s, 4); /* TimestampInMs */
+	Stream_Seek(s, 4); /* MessageId */
+	Stream_Seek(s, 6); /* KeyEventAttributes */
+
+	return TRUE;
+}
+
+/* Inject a key event into weston the same way the legacy RDP keyboard
+ * channel does (see xf_input_keyboard_event in rdp.c). */
+static void
+rdptext_inject_key(struct rdptext_state *t,
+		   const struct rdptext_key_event_info *info)
+{
+	RdpPeerContext *peer_ctx = t->peer_ctx;
+	struct weston_keyboard *keyboard;
+	uint32_t vk_code, scan_code;
+	enum wl_keyboard_key_state key_state;
+	bool send_key = false;
+	struct timespec time;
+
+	keyboard = weston_seat_get_keyboard(peer_ctx->item.seat);
+	if (!keyboard)
+		return;
+
+	vk_code = info->virtual_key;
+	if (info->is_extended_key)
+		vk_code |= KBDEXT;
+
+	scan_code = GetKeycodeFromVirtualKeyCode(vk_code, KEYCODE_TYPE_EVDEV);
+	if (scan_code == 0 || scan_code <= 8)
+		return;
+
+	if (info->event_flags & RDPTXT_KEY_FLAG_UP)
+		key_state = WL_KEYBOARD_KEY_STATE_RELEASED;
+	else
+		key_state = WL_KEYBOARD_KEY_STATE_PRESSED;
+
+	/* Ignore release if the key is not previously pressed, mirroring
+	 * the stale-release guard of the legacy keyboard path. */
+	if (key_state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		uint32_t *k, *end;
+
+		end = keyboard->keys.data + keyboard->keys.size;
+		for (k = keyboard->keys.data; k < end; k++) {
+			if (*k == (scan_code - 8)) {
+				send_key = true;
+				break;
+			}
+		}
+	} else {
+		send_key = true;
+	}
+
+	if (!send_key)
+		return;
+
+	weston_compositor_get_time(&time);
+	notify_key(peer_ctx->item.seat, &time, scan_code - 8, key_state,
+		   STATE_UPDATE_AUTOMATIC);
+	rdptext_verbose(t, "key vk=0x%x ext=%d flags=0x%x -> keycode %u %s",
+			info->virtual_key, info->is_extended_key,
+			info->event_flags, scan_code - 8,
+			key_state == WL_KEYBOARD_KEY_STATE_PRESSED ?
+			"press" : "release");
+}
+
+/* KEY_EVENT:
+ *   textInputHostId (4), keyEventId (4), routingStage (1),
+ *   lastSeenKeyEventId (4), editControlId (4), notifyFramework (1),
+ *   keyEventInfo (44), keyStatesSize (4), keyStates (var),
+ *   keyTextLength (4), keyText (var), deadChar (2),
+ *   keyNameTextLength (4), keyNameText (var)
+ */
+static void
+rdptext_handle_key_event(struct rdptext_state *t, wStream *s)
+{
+	UINT32 host_id, key_event_id, last_seen_key_event_id, control_id;
+	UINT32 key_states_size, key_text_len, key_name_text_len;
+	UINT8 routing_stage, notify_framework;
+	struct rdptext_key_event_info info = { 0 };
+
+	(void)control_id;
+	(void)last_seen_key_event_id;
+
+	if (Stream_GetRemainingLength(s) < 19)
+		return;
+
+	Stream_Read_UINT32(s, host_id);
+	Stream_Read_UINT32(s, key_event_id);
+	Stream_Read_UINT8(s, routing_stage);
+	Stream_Read_UINT32(s, last_seen_key_event_id);
+	Stream_Read_UINT32(s, control_id);
+	Stream_Read_UINT8(s, notify_framework);
+
+	if (!rdptext_read_key_event_info(s, &info))
+		return;
+
+	if (Stream_GetRemainingLength(s) < 4)
+		return;
+	Stream_Read_UINT32(s, key_states_size);
+	if (key_states_size > RDPTXT_MAX_KEYSTATS ||
+	    Stream_GetRemainingLength(s) < key_states_size)
+		return;
+	Stream_Seek(s, key_states_size);
+
+	if (Stream_GetRemainingLength(s) < 4)
+		return;
+	Stream_Read_UINT32(s, key_text_len);
+	if (key_text_len > RDPTXT_MAX_TEXT_UNITS ||
+	    Stream_GetRemainingLength(s) < (UINT64)key_text_len * 2)
+		return;
+	Stream_Seek(s, key_text_len * 2);
+
+	if (Stream_GetRemainingLength(s) < 6)
+		return;
+	Stream_Seek(s, 2); /* deadChar */
+	Stream_Read_UINT32(s, key_name_text_len);
+	if (key_name_text_len > RDPTXT_MAX_TEXT_UNITS ||
+	    Stream_GetRemainingLength(s) < (UINT64)key_name_text_len * 2)
+		return;
+	Stream_Seek(s, key_name_text_len * 2);
+
+	rdptext_verbose(t, "KEY_EVENT id=%u stage=%u notify=%d vk=0x%x "
+			"flags=0x%x", key_event_id, routing_stage,
+			notify_framework, info.virtual_key, info.event_flags);
+
+	/* notifyFramework tells us the key still has to reach the
+	 * application; during composition the IME consumed the key and the
+	 * flag is typically FALSE. */
+	if (notify_framework && t->focus_notified)
+		rdptext_inject_key(t, &info);
+
+	if (routing_stage == RDPTXT_KEY_ROUTING_NONE)
+		rdptext_send_ack_key_event(t, host_id, key_event_id);
+}
+
+/* CHARACTER_EVENT:
+ *   textInputHostId (4), keyEventId (4), editControlId (4),
+ *   keyDownEventId (4), keyEventInfo (44)
+ */
+static void
+rdptext_handle_character_event(struct rdptext_state *t, wStream *s)
+{
+	struct rdptext_key_event_info info = { 0 };
+
+	if (Stream_GetRemainingLength(s) < 16)
+		return;
+
+	Stream_Seek(s, 16);
+	if (!rdptext_read_key_event_info(s, &info))
+		return;
+
+	rdptext_verbose(t, "CHARACTER_EVENT character=0x%x (ignored: keys "
+			"arrive via KEY_EVENT / UPDATE_TEXT)", info.character);
+}
+
+/* ------------------------------------------------------------------ */
+/* C2S pump                                                            */
+/* ------------------------------------------------------------------ */
 
 static void
 rdptext_handle_client_version(struct rdptext_state *t, wStream *s)
 {
-	if (Stream_GetRemainingLength(s) < 24)
+	/* RDPTXT_NOTIFY_CLIENT_VERSION_PDU: versionMajor (4),
+	 * versionMinor (4); note there is no containerId here. */
+	if (Stream_GetRemainingLength(s) < 8)
 		return;
 
-	Stream_Seek(s, 16); /* containerId */
 	Stream_Read_UINT32(s, t->client_version_major);
 	Stream_Read_UINT32(s, t->client_version_minor);
-	rdptext_log(t, "client text-input version %u.%u",
+	t->client_version_received = true;
+
+	rdptext_log(t, "client text-input version %u.%u (minor is a "
+		    "capability bitmask)",
 		    t->client_version_major, t->client_version_minor);
+
+	rdptext_send_registrations(t);
+}
+
+static void
+rdptext_handle_report_client_options(struct rdptext_state *t, wStream *s)
+{
+	UINT32 options;
+
+	if (Stream_GetRemainingLength(s) < 4)
+		return;
+
+	Stream_Read_UINT32(s, options);
+	rdptext_verbose(t, "REPORT_CLIENT_OPTIONS 0x%x%s", options,
+			(options & 0x1) ? " (EnablePredictedKeyReporting)" : "");
+}
+
+static void
+rdptext_handle_remote_integration_status(struct rdptext_state *t, wStream *s)
+{
+	UINT8 enabled;
+
+	if (Stream_GetRemainingLength(s) < 1)
+		return;
+
+	Stream_Read_UINT8(s, enabled);
+	t->integration_enabled = (enabled != 0);
+
+	rdptext_log(t, "REMOTE_INTEGRATION_STATUS: %s",
+		    t->integration_enabled ? "enabled" : "disabled");
+
+	if (!t->integration_enabled && t->focus_notified) {
+		rdptext_send_edit_control_focus(t, false, NULL);
+		t->focus_notified = false;
+		t->focused_surface = NULL;
+	}
+}
+
+static void
+rdptext_handle_enable_window(struct rdptext_state *t, wStream *s)
+{
+	UINT32 host_id;
+	UINT8 input_enabled;
+
+	if (Stream_GetRemainingLength(s) < 5)
+		return;
+
+	Stream_Read_UINT32(s, host_id);
+	Stream_Read_UINT8(s, input_enabled);
+
+	if (host_id != RDPTXT_HOST_ID) {
+		rdptext_verbose(t, "ENABLE_WINDOW for unknown host %u",
+				host_id);
+		return;
+	}
+
+	t->window_input_enabled = (input_enabled != 0);
+	rdptext_log(t, "ENABLE_WINDOW: input %s",
+		    t->window_input_enabled ? "enabled" : "disabled");
+}
+
+static void
+rdptext_handle_reregistration_request(struct rdptext_state *t)
+{
+	rdptext_log(t, "REREGISTRATION_REQUEST: re-registering targets");
+	t->registered = false;
+	if (t->focus_notified) {
+		t->focus_notified = false;
+		t->focused_surface = NULL;
+	}
+	rdptext_send_registrations(t);
+	rdptext_update_edit_focus(t);
+}
+
+static void
+rdptext_handle_acknowledge_operation(struct rdptext_state *t, wStream *s)
+{
+	UINT32 client_id, control_id, ack_type, operation_id;
+
+	if (Stream_GetRemainingLength(s) < 16)
+		return;
+
+	Stream_Read_UINT32(s, client_id);
+	Stream_Read_UINT32(s, control_id);
+	Stream_Read_UINT32(s, ack_type);
+	Stream_Read_UINT32(s, operation_id);
+
+	rdptext_verbose(t, "ACKNOWLEDGE_OPERATION type=%u op=%u",
+			ack_type, operation_id);
 }
 
 static void
@@ -335,46 +1386,88 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 	case RDPTXT_PDU_UPDATE_TEXT_AND_SELECTION:
 		rdptext_handle_update_text(t, pdu_id, s);
 		break;
+	case RDPTXT_PDU_UPDATE_COMPOSITION:
+		rdptext_handle_update_composition(t, s);
+		break;
+	case RDPTXT_PDU_SET_COMPOSITION_INFO:
+		rdptext_handle_set_composition_info(t, s);
+		break;
+	case RDPTXT_PDU_KEY_EVENT:
+		rdptext_handle_key_event(t, s);
+		break;
+	case RDPTXT_PDU_CHARACTER_EVENT:
+		rdptext_handle_character_event(t, s);
+		break;
 	case RDPTXT_PDU_NOTIFY_CLIENT_VERSION:
 		rdptext_handle_client_version(t, s);
 		break;
-	case RDPTXT_PDU_KEY_EVENT:
-	case RDPTXT_PDU_CHARACTER_EVENT:
-		/* Raw keys: only meaningful once key-replay is implemented;
-		 * the Windows IME consumes these before composing. */
+	case RDPTXT_PDU_REPORT_CLIENT_OPTIONS:
+		rdptext_handle_report_client_options(t, s);
+		break;
+	case RDPTXT_PDU_REMOTE_INTEGRATION_STATUS:
+		rdptext_handle_remote_integration_status(t, s);
+		break;
+	case RDPTXT_PDU_ENABLE_WINDOW:
+		rdptext_handle_enable_window(t, s);
+		break;
+	case RDPTXT_PDU_REREGISTRATION_REQUEST:
+		rdptext_handle_reregistration_request(t);
+		break;
+	case RDPTXT_PDU_ACKNOWLEDGE_OPERATION:
+	case RDPTXT_PDU_ACKNOWLEDGE_HOST_OPERATION:
+		rdptext_handle_acknowledge_operation(t, s);
+		break;
+	case RDPTXT_PDU_ERROR_REPORT:
+		rdptext_log(t, "client reported ERROR_REPORT: edit buffer out "
+			    "of sync, client resyncs itself");
+		break;
+	case RDPTXT_PDU_SET_SELECTION:
+	case RDPTXT_PDU_UPDATE_FORMAT:
+	case RDPTXT_PDU_RECONVERSION_CANDIDATES:
+		rdptext_verbose(t, "PDU 0x%04X ignored", pdu_id);
 		break;
 	default:
-		rdptext_log(t, "PDU 0x%04X (%u bytes) ignored", pdu_id, size);
+		rdptext_verbose(t, "PDU 0x%04X (%u bytes) ignored", pdu_id,
+				size);
 		break;
 	}
 }
 
 /* Drain whatever the client pushed into the C2S channel.
  *
- * MVP simplification: each WTSVirtualChannelRead() returns exactly one
- * message (one client-side WTSVirtualChannelWrite == one PDU), so PDUs are
- * never split across messages here. */
+ * Each WTSVirtualChannelRead() returns exactly one message (one
+ * client-side WTSVirtualChannelWrite == one PDU), so PDUs are never split
+ * across messages here. */
 static void
 rdptext_pump_c2s(struct rdptext_state *t)
 {
-	unsigned char buf[8192];
-	ULONG read = 0;
-
 	while (t->c2s_channel) {
+		ULONG read = 0;
 		wStream *s;
 
-		if (!WTSVirtualChannelRead(t->c2s_channel, 0, (PCHAR)buf,
-					   sizeof(buf), &read))
+		/* first call with a NULL buffer: returns the pending size
+		 * without consuming the message */
+		if (!WTSVirtualChannelRead(t->c2s_channel, 0, NULL, 0, &read))
 			break;   /* no more data (or error) */
 		if (read == 0)
 			break;
+		if (read > RDPTXT_MAX_PDU_SIZE) {
+			rdptext_log(t, "oversized C2S message (%lu bytes), "
+				    "dropped", (unsigned long)read);
+			/* consume in chunks to unblock the channel */
+			read = RDPTXT_MAX_PDU_SIZE;
+		}
 
-		/* Stream_New does not copy an external buffer; allocate our
-		 * own so the stream owns its storage. */
 		s = Stream_New(NULL, read);
 		if (!s)
 			return;
-		memcpy(Stream_Buffer(s), buf, read);
+
+		if (!WTSVirtualChannelRead(t->c2s_channel, 0,
+					   (PCHAR)Stream_Buffer(s), read,
+					   &read) || read == 0) {
+			Stream_Free(s, TRUE);
+			break;
+		}
 		Stream_SetLength(s, read);
 
 		while (Stream_GetRemainingLength(s) >= RDPTXT_HEADER_SIZE)
@@ -409,8 +1502,9 @@ rdptext_open_channels(struct rdptext_state *t)
 	if (p_session_id)
 		WTSFreeMemory(p_session_id);
 
-	/* Both channels are opened server-side; msrdc's TextInput plugin
-	 * answers the DYNVC CREATE requests when present. */
+	/* Both channels are opened server-side; msrdc's remotetextplugin
+	 * answers the DYNVC CREATE requests when text processing
+	 * redirection is enabled on the connection. */
 	t->s2c_channel = WTSVirtualChannelOpenEx(t->session_id,
 						 (LPSTR)RDPTXT_CHANNEL_S2C,
 						 WTS_CHANNEL_OPTION_DYNAMIC);
@@ -427,18 +1521,44 @@ int
 rdp_rdptext_init(freerdp_peer *client)
 {
 	RdpPeerContext *peer_ctx = (RdpPeerContext *)client->context;
+	struct rdp_backend *b = peer_ctx->rdpBackend;
 	struct rdptext_state *t;
+	const char *env;
 
-	assert_compositor_thread(peer_ctx->rdpBackend);
+	assert_compositor_thread(b);
 
 	if (!peer_ctx->vcm)
 		return -1;
+
+	env = getenv("WESTON_RDPETXT");
+	if (env && strcmp(env, "0") == 0) {
+		rdptext_log(NULL, "disabled via WESTON_RDPETXT=0");
+		return -1;
+	}
 
 	t = calloc(1, sizeof(*t));
 	if (!t)
 		return -1;
 	t->peer_ctx = peer_ctx;
+	t->integration_enabled = true;
+	t->window_input_enabled = true;
+	t->verbose = getenv("WESTON_RDPETXT_DEBUG") != NULL;
 	peer_ctx->rdptext = t;
+
+	t->bridge_api =
+		weston_plugin_api_get(b->compositor,
+				      WESTON_TEXT_INPUT_BRIDGE_API_NAME,
+				      sizeof(struct weston_text_input_bridge_api));
+	if (t->bridge_api) {
+		t->bridge_api->set_state_listener(b->compositor,
+						  rdptext_bridge_state_cb, t);
+		t->bridge_listener_attached = true;
+	} else {
+		rdptext_log(t, "text-input bridge API not available; "
+			    "was the shell initialized with "
+			    "text_backend_init()? committed text will be "
+			    "logged but not injected");
+	}
 
 	rdptext_open_channels(t);
 	return 0;
@@ -464,11 +1584,32 @@ rdp_rdptext_process(RdpPeerContext *peer_ctx)
 			t->ready_failed = TRUE;
 			rdptext_log(t, "client never confirmed the TextInput "
 				    "DVCs; MS-RDPETXT unavailable (msrdc "
-				    "without TextInput plugin?)");
+				    "without redirecttextprocessing:i:1?)");
 		}
 	}
 
 	rdptext_pump_c2s(t);
+
+	/* The seat/keyboard only exists after the peer activation finished;
+	 * catch up on the text input state once it did. */
+	if (t->version_sent && !t->bridge_listener_attached &&
+	    (peer_ctx->item.flags & RDP_PEER_ACTIVATED)) {
+		struct rdp_backend *b = peer_ctx->rdpBackend;
+
+		t->bridge_api =
+			weston_plugin_api_get(b->compositor,
+					      WESTON_TEXT_INPUT_BRIDGE_API_NAME,
+					      sizeof(struct weston_text_input_bridge_api));
+		if (t->bridge_api) {
+			t->bridge_api->set_state_listener(b->compositor,
+							  rdptext_bridge_state_cb,
+							  t);
+			t->bridge_listener_attached = true;
+		}
+	}
+
+	if (t->registered)
+		rdptext_update_edit_focus(t);
 }
 
 void
@@ -479,10 +1620,45 @@ rdp_rdptext_destroy(RdpPeerContext *peer_ctx)
 	if (!t)
 		return;
 
+	if (t->bridge_api) {
+		if (t->focus_notified)
+			rdptext_send_edit_control_focus(t, false, NULL);
+		if (t->registered)
+			rdptext_send_host_focus(t, false);
+		if (t->bridge_listener_attached)
+			t->bridge_api->set_state_listener(
+				t->peer_ctx->rdpBackend->compositor, NULL, NULL);
+	}
+
 	if (t->s2c_channel)
 		WTSVirtualChannelClose(t->s2c_channel);
 	if (t->c2s_channel)
 		WTSVirtualChannelClose(t->c2s_channel);
+
+	free(t->pending_commit);
+	free(t->last_commit_text);
 	free(t);
 	peer_ctx->rdptext = NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Legacy keyboard suppression                                         */
+/* ------------------------------------------------------------------ */
+
+/* When the client routes all keys through MS-RDPETXT, the legacy RDP
+ * keyboard channel may deliver duplicates for IME-unconsumed keys. Test
+ * runs can force suppression with WESTON_RDPETXT_SUPPRESS_LEGACY_KEYS=1. */
+bool
+rdp_rdptext_suppress_legacy_keys(RdpPeerContext *peer_ctx)
+{
+	static int lookup_done = -1;
+	struct rdptext_state *t;
+
+	if (lookup_done < 0)
+		lookup_done = getenv("WESTON_RDPETXT_SUPPRESS_LEGACY_KEYS") ?
+			      1 : 0;
+
+	t = peer_ctx ? peer_ctx->rdptext : NULL;
+
+	return lookup_done == 1 && t && t->focus_notified;
 }

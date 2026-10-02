@@ -95,6 +95,9 @@ struct text_backend;
 struct text_backend *
 text_backend_init(struct weston_compositor *ec);
 
+int
+text_input_bridge_init(struct weston_compositor *ec);
+
 void
 text_backend_destroy(struct text_backend *text_backend);
 

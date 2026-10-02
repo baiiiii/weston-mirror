@@ -173,6 +173,22 @@ if simple_build_all or simple_clients_enabled.contains('im')
 	)
 endif
 
+# Minimal zwp_text_input_v3 test client for the MS-RDPETXT IME bridge.
+executable(
+	'weston-text-input-test', [
+		'text-input-test.c',
+		text_input_unstable_v3_client_protocol_h,
+		text_input_unstable_v3_protocol_c,
+	],
+	include_directories: common_inc,
+	dependencies: [
+		dep_libshared,
+		dep_wayland_client,
+	],
+	install: true,
+	install_dir: dir_libexec
+)
+
 tools_enabled = get_option('tools')
 tools_list = [
 	{

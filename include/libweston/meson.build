@@ -3,6 +3,7 @@ install_headers(
 	'libweston.h',
 	'matrix.h',
 	'plugin-registry.h',
+	'text-input-bridge.h',
 	'windowed-output-api.h',
 	'weston-log.h',
 	'zalloc.h',
