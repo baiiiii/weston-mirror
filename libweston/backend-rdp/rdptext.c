@@ -707,7 +707,9 @@ static void
 	/* EditControlInfo (36 bytes):
 	 *   bufferLength (4) -1 = unlimited
 	 *   editSettings (4)
-	 *   frameworkType (4) Default
+	 *   frameworkType (4) Legacy —— 与 REGISTER_REMOTE_KEY_TARGET 的
+	 *     TextInputHostSettings.Type=Legacy 保持一致；0 不在枚举表内，
+	 *     InputService 处理焦点时可能因此拒绝关联。
 	 *   frameworkVersion (4)
 	 *   id (4)
 	 *   inputScope (4) IS_DEFAULT
@@ -716,7 +718,7 @@ static void
 	 */
 	Stream_Write_UINT32(s, 0xFFFFFFFF);
 	Stream_Write_UINT32(s, 0);
-	Stream_Write_UINT32(s, 0);
+	Stream_Write_UINT32(s, RDPTXT_HOST_TYPE_LEGACY);
 	Stream_Write_UINT32(s, 0);
 	Stream_Write_UINT32(s, RDPTXT_EDIT_CONTROL_ID);
 	Stream_Write_UINT32(s, 0);
