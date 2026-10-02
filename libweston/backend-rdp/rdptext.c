@@ -150,7 +150,8 @@ struct rdptext_state {
 	uint32_t client_version_minor;
 
 	bool registered;      /* registration PDUs sent */
-	bool integration_enabled; /* REMOTE_INTEGRATION_STATUS from client */
+	bool integration_enabled;    /* our gate, kept true (see handler) */
+	bool client_integration_status; /* REMOTE_INTEGRATION_STATUS seen */
 	bool window_input_enabled; /* ENABLE_WINDOW for our host id */
 	bool focus_notified;  /* an edit control currently has focus */
 	struct weston_surface *focused_surface;
@@ -1316,12 +1317,15 @@ rdptext_handle_remote_integration_status(struct rdptext_state *t, wStream *s)
 		return;
 
 	Stream_Read_UINT8(s, enabled);
-	t->integration_enabled = (enabled != 0);
+	t->client_integration_status = (enabled != 0);
 
+	/* Live msrdc sends isEnabled=false as its very first message, before
+	 * even the version response; gating our sends on it would deadlock
+	 * the handshake, so it is recorded but not enforced. */
 	rdptext_log(t, "REMOTE_INTEGRATION_STATUS: %s",
-		    t->integration_enabled ? "enabled" : "disabled");
+		    t->client_integration_status ? "enabled" : "disabled");
 
-	if (!t->integration_enabled && t->focus_notified) {
+	if (!t->client_integration_status && t->focus_notified) {
 		rdptext_send_edit_control_focus(t, false, NULL);
 		t->focus_notified = false;
 		t->focused_surface = NULL;
@@ -1498,6 +1502,29 @@ rdptext_pump_c2s(struct rdptext_state *t)
 			rdptext_hex_dump(t, Stream_Buffer(s), read);
 		}
 		t->c2s_dump_count++;
+
+		/* live msrdc clients prefix every message with a 4-byte
+		 * outer length (bytes following the prefix); the spec PDU
+		 * ([size][pduId][payload]) starts after it */
+		if (read >= 8) {
+			const unsigned char *b = Stream_Buffer(s);
+			UINT32 outer_len = (UINT32)b[0] | ((UINT32)b[1] << 8) |
+					   ((UINT32)b[2] << 16) |
+					   ((UINT32)b[3] << 24);
+
+			if (outer_len == read - 4) {
+				memmove(Stream_Buffer(s), Stream_Buffer(s) + 4,
+					read - 4);
+				read -= 4;
+				Stream_SetLength(s, read);
+				Stream_SetPosition(s, 0);
+			} else {
+				rdptext_log(t, "C2S outer length mismatch: "
+					    "%u vs message %lu; parsing from "
+					    "offset 0", outer_len,
+					    (unsigned long)read - 4);
+			}
+		}
 
 		while (Stream_GetRemainingLength(s) >= RDPTXT_HEADER_SIZE)
 			rdptext_process_pdu(t, s);
