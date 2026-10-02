@@ -67,7 +67,12 @@
 
 #define RDPTXT_HEADER_SIZE 6
 #define RDPTXT_VERSION_MAJOR 1
-#define RDPTXT_VERSION_MINOR 0
+/* minor is a bitmask of protocol updates (MS-RDPETXT 1.3.5).  The live
+ * client reports (1,7); report the same set so the client's InputService
+ * does not treat us as a pre-update peer and keep remote integration
+ * disabled (it announces REMOTE_INTEGRATION_STATUS right after the
+ * version exchange). */
+#define RDPTXT_VERSION_MINOR 7
 
 /* Give the client ~10 s to confirm both DYNVC CREATEs before assuming it
  * has no TextInput plugin (process() is pumped once per VCM wake). */
@@ -158,6 +163,7 @@ struct rdptext_state {
 
 	uint32_t host_focus_ordinal;
 	uint32_t window_id;   /* RAIL window id of the focused surface */
+	uint32_t notify_op_id; /* operationId for server->client notifications */
 
 	/* IME state assembled from client PDUs */
 	bool composition_active;
@@ -684,6 +690,54 @@ rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
 		    gaining ? "gained" : "lost", have_bounds);
 }
 
+/* TEXT_CHANGED_PDU (server -> client), MS-RDPETXT 2.2.2.36.  The client
+ * keeps a local edit buffer per registered edit control and the TSF3 IMEs
+ * read it; prime it with the current (empty) text and caret after focus
+ * gain so the integration has a defined state to work from.  The client
+ * acknowledges this with ACKNOWLEDGE_OPERATION (TextChange). */
+static void
+rdptext_send_text_changed(struct rdptext_state *t)
+{
+	wStream *s;
+	const size_t keystates_size = 256;
+	size_t len;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	/* ids + ranges + opId + textLength + originKey + override +
+	 * noConflict + both regions (len 0) + keyStates */
+	len = 4 + 4 + 8 + 8 + 4 + 4 + 44 + 1 + 1 +
+	      4 + 4 + 4 + 4 + 4 + keystates_size;
+	s = Stream_New(NULL, len);
+	if (!s)
+		return;
+
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+	Stream_Write_UINT32(s, RDPTXT_EDIT_CONTROL_ID);
+	Stream_Write_UINT32(s, 0); /* replacedTextRange.begin */
+	Stream_Write_UINT32(s, 0); /* replacedTextRange.end */
+	Stream_Write_UINT32(s, 0); /* newSelectionRange.begin (caret) */
+	Stream_Write_UINT32(s, 0); /* newSelectionRange.end */
+	Stream_Write_UINT32(s, ++t->notify_op_id);
+	Stream_Write_UINT32(s, 0); /* textLength */
+	Stream_Zero(s, 44);        /* originKey: KeyEventHostInfo */
+	Stream_Write_UINT8(s, 0);  /* override */
+	Stream_Write_UINT8(s, 0);  /* noConflict */
+	Stream_Write_UINT32(s, 0); /* offset1 */
+	Stream_Write_UINT32(s, 0); /* updatedTextRegion1Length */
+	Stream_Write_UINT32(s, 0xFFFFFFFF); /* offset2: -1, no 2nd region */
+	Stream_Write_UINT32(s, 0); /* updatedTextRegion2Length */
+	Stream_Write_UINT32(s, (UINT32)keystates_size);
+	Stream_Zero(s, keystates_size);
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_TEXT_CHANGED,
+			 Stream_Buffer(s), len);
+	Stream_Free(s, TRUE);
+	rdptext_log(t, "TEXT_CHANGED sent (initial, opId %u)",
+		    t->notify_op_id);
+}
+
 /* ACKNOWLEDGE_REMOTE_OPERATION_PDU (server -> client):
  *   textInputClientId (4), editControlId (4), operationId (4),
  *   errorCode (4)
@@ -798,6 +852,7 @@ rdptext_update_edit_focus(struct rdptext_state *t)
 
 	if (active) {
 		rdptext_send_edit_control_focus(t, true, surface);
+		rdptext_send_text_changed(t);
 		rdptext_log(t, "edit control focused: surface %p",
 			    (void *)surface);
 	}
@@ -1400,8 +1455,8 @@ rdptext_handle_acknowledge_operation(struct rdptext_state *t, wStream *s)
 	Stream_Read_UINT32(s, ack_type);
 	Stream_Read_UINT32(s, operation_id);
 
-	rdptext_verbose(t, "ACKNOWLEDGE_OPERATION type=%u op=%u",
-			ack_type, operation_id);
+	rdptext_log(t, "ACKNOWLEDGE_OPERATION type=%u client=%u control=%u "
+		    "op=%u", ack_type, client_id, control_id, operation_id);
 }
 
 static void
