@@ -24,7 +24,7 @@ jobs:
             libwayland-dev wayland-protocols \
             libpixman-1-dev libdrm-dev libevdev-dev libinput-dev \
             libxkbcommon-dev libpng-dev libjpeg-dev \
-            libcairo2-dev libpango1.0-dev libglib2.0-dev \
+            libcairo2-dev libpango1.0-dev libglib2.0-dev libwebp-dev \
             freerdp2-dev libwinpr2-dev
 
       - name: Check out source
