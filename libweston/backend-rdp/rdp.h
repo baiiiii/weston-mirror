@@ -202,6 +202,8 @@ typedef struct _rdp_audio_block_info {
 	UINT64 ackPlayedTime;
 } rdp_audio_block_info;
 
+struct rdptext_state;
+
 struct rdp_peer_context {
 	rdpContext _p;
 
@@ -225,6 +227,8 @@ struct rdp_peer_context {
 	HANDLE vcm;
 	RailServerContext *rail_server_context;
 	DrdynvcServerContext *drdynvc_server_context;
+	/* MS-RDPETXT (Windows IME bridging), managed by rdptext.c */
+	struct rdptext_state *rdptext;
 	DispServerContext *disp_server_context;
 	RdpgfxServerContext *rail_grfx_server_context;
 #ifdef HAVE_FREERDP_GFXREDIR_H
@@ -387,6 +391,13 @@ void rdp_rail_peer_context_free(freerdp_peer *client, RdpPeerContext *context);
 void rdp_rail_output_repaint(struct weston_output *output, pixman_region32_t *damage);
 bool rdp_drdynvc_init(freerdp_peer *client);
 void rdp_drdynvc_destroy(RdpPeerContext *context);
+
+// rdptext.c — MS-RDPETXT server (Windows IME bridging)
+int rdp_rdptext_init(freerdp_peer *client);
+void rdp_rdptext_process(RdpPeerContext *context);
+void rdp_rdptext_destroy(RdpPeerContext *context);
+void rdptext_notify_commit(struct rdp_backend *b, const char *utf8,
+			   uint32_t replace_begin, int32_t replace_end);
 
 // rdpdisp.c
 bool
