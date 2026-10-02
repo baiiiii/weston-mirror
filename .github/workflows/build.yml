@@ -55,3 +55,6 @@ jobs:
 
       - name: Build
         run: ninja -C build
+
+# Dependency set mirrors the FreeRDP 2.x API the WSLg image build uses;
+# bump the container image deliberately if that ever moves to 3.x.
