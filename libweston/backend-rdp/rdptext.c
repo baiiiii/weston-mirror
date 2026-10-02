@@ -168,6 +168,7 @@ struct rdptext_state {
 	bool bridge_listener_attached;
 
 	bool verbose;
+	int c2s_dump_count;
 };
 
 /* ------------------------------------------------------------------ */
@@ -195,6 +196,23 @@ rdptext_log(struct rdptext_state *t, const char *fmt, ...)
 		if ((t) && (t)->verbose) \
 			rdptext_log(t, __VA_ARGS__); \
 	} while (0)
+
+/* Hex dump of the first bytes of a message - vital to diagnose
+ * client-side framing mismatches (log goes to weston.log). */
+static void
+rdptext_hex_dump(struct rdptext_state *t, const unsigned char *data,
+		 size_t len)
+{
+	char buf[3 * 32 + 8];
+	size_t i, n = len < 32 ? len : 32;
+
+	(void)t;
+	for (i = 0; i < n; i++)
+		snprintf(buf + 3 * i, 4, "%02X ", data[i]);
+	buf[3 * n] = ' ';
+	weston_log("rdptext:   bytes: %s (%zu bytes total)
+", buf, len);
+}
 
 /* ------------------------------------------------------------------ */
 /* UTF-16LE <-> UTF-8                                                  */
@@ -1377,7 +1395,11 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 	Stream_Read_UINT16(s, pdu_id);
 
 	if (size < 2 || Stream_GetRemainingLength(s) < size - 2) {
-		rdptext_log(t, "truncated PDU 0x%04X", pdu_id);
+		rdptext_log(t, "truncated PDU 0x%04X (declared size %u)", pdu_id,
+			    size);
+		/* the stream is positioned at the message start here */
+		rdptext_hex_dump(t, (const unsigned char *)Stream_Pointer(s) - 6,
+				 32);
 		return;
 	}
 
@@ -1469,6 +1491,14 @@ rdptext_pump_c2s(struct rdptext_state *t)
 			break;
 		}
 		Stream_SetLength(s, read);
+
+		/* dump the first messages verbatim: the client-side framing
+		 * has not been verified against a live msrdc yet */
+		if (t->c2s_dump_count < 5 || t->verbose) {
+			rdptext_log(t, "C2S message #%d:", t->c2s_dump_count);
+			rdptext_hex_dump(t, Stream_Buffer(s), read);
+		}
+		t->c2s_dump_count++;
 
 		while (Stream_GetRemainingLength(s) >= RDPTXT_HEADER_SIZE)
 			rdptext_process_pdu(t, s);
