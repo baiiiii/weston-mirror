@@ -49,6 +49,7 @@
 
 #include <libweston/libweston.h>
 #include <libweston/plugin-registry.h>
+#include <libweston/text-input-bridge.h>
 
 #include "weston.h"
 #include "text-input-unstable-v3-server-protocol.h"
@@ -86,7 +87,6 @@ struct bridge_text_input {
 	int32_t pending_cursor_x, pending_cursor_y;
 	int32_t pending_cursor_w, pending_cursor_h;
 
-	uint32_t commit_serial; /* last serial the client committed with */
 	uint32_t done_serial;   /* serial of our last done() event */
 
 	bool entered; /* we sent enter() and no leave() yet */
@@ -152,7 +152,11 @@ bridge_send_leave(struct bridge_text_input *ti)
 	if (!ti->entered)
 		return;
 
-	zwp_text_input_v3_send_leave(ti->resource);
+	/* v3's leave event carries the surface being left; callers keep
+	 * ti->surface valid until after this call. */
+	if (ti->surface && ti->surface->resource)
+		zwp_text_input_v3_send_leave(ti->resource,
+					     ti->surface->resource);
 	ti->entered = false;
 }
 
@@ -204,8 +208,11 @@ ti_surface_destroy_handler(struct wl_listener *listener, void *data)
 		container_of(listener, struct bridge_text_input,
 			     surface_destroy_listener);
 
-	/* Same as above: do not remove the listener link. */
+	/* Same as above: do not remove the listener link. The surface
+	 * resource is going away, so a leave() referencing it would be
+	 * invalid - just drop the entered state. */
 	ti->surface_listener_attached_to = NULL;
+	ti->entered = false;
 	ti->surface = NULL;
 	bridge_notify_state(ti->bridge);
 }
@@ -365,12 +372,10 @@ ti_request_set_cursor_rectangle(struct wl_client *client,
 }
 
 static void
-ti_request_commit(struct wl_client *client, struct wl_resource *resource,
-		  uint32_t serial)
+ti_request_commit(struct wl_client *client, struct wl_resource *resource)
 {
 	struct bridge_text_input *ti = ti_from_resource(resource);
 
-	ti->commit_serial = serial;
 	ti->enabled = ti->pending_enabled;
 
 	if (ti->have_pending_cursor_rect) {
@@ -425,7 +430,8 @@ ti_unbind(struct wl_resource *resource)
 static void
 manager_get_text_input(struct wl_client *client,
 		       struct wl_resource *manager_resource,
-		       struct wl_resource *seat_resource, uint32_t id)
+		       uint32_t id,
+		       struct wl_resource *seat_resource)
 {
 	struct ti_bridge *bridge = wl_resource_get_user_data(manager_resource);
 	struct weston_seat *seat = wl_resource_get_user_data(seat_resource);
@@ -461,8 +467,15 @@ manager_get_text_input(struct wl_client *client,
 	ti_update_focus(ti);
 }
 
+static void
+manager_destroy(struct wl_client *client, struct wl_resource *resource)
+{
+	wl_resource_destroy(resource);
+}
+
 static const struct zwp_text_input_manager_v3_interface
 manager_implementation = {
+	.destroy = manager_destroy,
 	.get_text_input = manager_get_text_input,
 };
 

@@ -173,9 +173,10 @@ text_input_enter(void *data, struct zwp_text_input_v3 *text_input,
 }
 
 static void
-text_input_leave(void *data, struct zwp_text_input_v3 *text_input)
+text_input_leave(void *data, struct zwp_text_input_v3 *text_input,
+		 struct wl_surface *surface)
 {
-	printf("[ti] leave\n");
+	printf("[ti] leave (surface %p)\n", (void *)surface);
 }
 
 static void
