@@ -106,6 +106,7 @@
 #define RDPTXT_PDU_UPDATE_COMPOSITION              0x0204
 #define RDPTXT_PDU_SET_COMPOSITION_INFO            0x0205
 #define RDPTXT_PDU_RECONVERSION_CANDIDATES         0x0206
+#define RDPTXT_PDU_UPDATE_INPUT_PROFILE            0x0208
 #define RDPTXT_PDU_ACKNOWLEDGE_OPERATION           0x020B
 #define RDPTXT_PDU_ERROR_REPORT                    0x020C
 #define RDPTXT_PDU_REGISTER_REMOTE_TEXT_TARGET     0x0300
@@ -120,6 +121,7 @@
 #define RDPTXT_PDU_NOTIFY_SERVER_VERSION           0x031A
 #define RDPTXT_PDU_ACKNOWLEDGE_REMOTE_OPERATION    0x0312
 #define RDPTXT_PDU_ACKNOWLEDGE_KEY_EVENT           0x0313
+#define RDPTXT_PDU_INPUT_PROFILE_CHANGED           0x0314
 #define RDPTXT_PDU_REMOTE_TEXT_TARGET_THREAD_PROPS 0x0322
 #define RDPTXT_PDU_REMOTE_INTEGRATION_STATUS       0x0602
 #define RDPTXT_PDU_REREGISTRATION_REQUEST          0x0603
@@ -628,9 +630,10 @@ rdptext_get_cursor_bounds(struct rdptext_state *t, struct weston_surface *surfac
  *   override (1)
  */
 static void
-rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
-				struct weston_surface *surface)
+	rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
+					struct weston_surface *surface)
 {
+	struct rdp_backend *b = t->peer_ctx->rdpBackend;
 	wStream *s;
 	pixman_box32_t bounds;
 	bool have_bounds = false;
@@ -642,8 +645,43 @@ rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
 	if (!s)
 		return;
 
-	if (gaining && surface)
+	if (gaining && surface) {
 		have_bounds = rdptext_get_cursor_bounds(t, surface, &bounds);
+		if (!have_bounds && surface->width > 0 &&
+		    surface->height > 0) {
+			/* 应用未报告光标矩形时回退到整个窗口区域，
+			 * 避免全 0 矩形被客户端当作不可见控件 */
+			struct weston_view *view = NULL;
+			struct weston_output *output;
+			float gx1, gy1, gx2, gy2;
+
+			output = rdp_output_get_primary(b->compositor);
+			wl_list_for_each(view, &surface->views, surface_link) {
+				if (view->output) {
+					output = view->output;
+					break;
+				}
+			}
+			if (view && output) {
+				weston_view_to_global_float(view, 0.f, 0.f,
+							    &gx1, &gy1);
+				weston_view_to_global_float(view,
+					(float)surface->width,
+					(float)surface->height, &gx2, &gy2);
+				bounds.x1 = (int32_t)gx1;
+				bounds.y1 = (int32_t)gy1;
+				bounds.x2 = (int32_t)gx2;
+				bounds.y2 = (int32_t)gy2;
+				to_client_coordinate(t->peer_ctx, output,
+						     &bounds.x1, &bounds.y1,
+						     NULL, NULL);
+				to_client_coordinate(t->peer_ctx, output,
+						     &bounds.x2, &bounds.y2,
+						     NULL, NULL);
+				have_bounds = true;
+			}
+		}
+	}
 
 	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
 	if (have_bounds) {
@@ -1442,6 +1480,51 @@ rdptext_handle_reregistration_request(struct rdptext_state *t)
 	rdptext_update_edit_focus(t);
 }
 
+/* UPDATE_INPUT_PROFILE_PDU (client -> server), MS-RDPETXT 2.2.2.18:
+ *   textInputClientId (4), profile (82 CoreInputProfile), initializing (1)
+ * The client activates the input profile it wants on this thread.  Per
+ * MS-RDPETXT 3.1.5.3 the server does its best to honor the request and
+ * MUST respond with INPUT_PROFILE_CHANGED; without the confirmation the
+ * client's InputService never finishes enabling remote integration.
+ * We accept the requested profile verbatim (weston has no TSF state). */
+static void
+rdptext_handle_update_input_profile(struct rdptext_state *t, wStream *s)
+{
+	UINT32 client_id, initializing;
+	const size_t profile_size = 82;
+	BYTE profile[82];
+	UINT16 langid;
+
+	if (Stream_GetRemainingLength(s) < 4 + profile_size + 1)
+		return;
+
+	Stream_Read_UINT32(s, client_id);
+	Stream_Read(s, profile, profile_size);
+	Stream_Read_UINT8(s, initializing);
+
+	langid = (UINT16)(profile[0] | ((UINT16)profile[1] << 8));
+	rdptext_log(t, "UPDATE_INPUT_PROFILE client=%u langid=0x%04X "
+		    "initializing=%u", client_id, langid, initializing);
+
+	/* Confirm with the exact profile the client asked for even when
+	 * initializing=TRUE: weston keeps no TSF state, so accepting the
+	 * request verbatim is the closest possible "honored" reply and
+	 * lets the client's InputService finish enabling integration. */
+	if (rdptext_s2c_ok(t)) {
+		wStream *r = Stream_New(NULL, 4 + profile_size);
+		if (!r)
+			return;
+		Stream_Write_UINT32(r, client_id);
+		Stream_Write(r, profile, profile_size);
+		rdptext_send_pdu(t, t->s2c_channel,
+				 RDPTXT_PDU_INPUT_PROFILE_CHANGED,
+				 Stream_Buffer(r), 4 + profile_size);
+		Stream_Free(r, TRUE);
+		rdptext_log(t, "INPUT_PROFILE_CHANGED sent (accepted client "
+			    "profile)");
+	}
+}
+
 static void
 rdptext_handle_acknowledge_operation(struct rdptext_state *t, wStream *s)
 {
@@ -1510,6 +1593,9 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 		break;
 	case RDPTXT_PDU_ENABLE_WINDOW:
 		rdptext_handle_enable_window(t, s);
+		break;
+	case RDPTXT_PDU_UPDATE_INPUT_PROFILE:
+		rdptext_handle_update_input_profile(t, s);
 		break;
 	case RDPTXT_PDU_REREGISTRATION_REQUEST:
 		rdptext_handle_reregistration_request(t);
