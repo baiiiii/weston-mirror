@@ -45,7 +45,7 @@ jobs:
             -Dbackend-default=rdp \
             -Dbackend-drm=false -Dbackend-drm-screencast-vaapi=false \
             -Dbackend-headless=false -Dbackend-wayland=false -Dbackend-x11=false \
-            -Dbackend-fbdev=false -Drenderer-gl=false \
+            -Dbackend-fbdev=false -Drenderer-gl=false -Dxwayland=false \
             -Dcolor-management-colord=false -Dcolor-management-lcms=false \
             -Dscreenshare=false -Dsystemd=false -Dwslgd=true \
             -Dremoting=false -Dpipewire=false \
