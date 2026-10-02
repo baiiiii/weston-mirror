@@ -7,19 +7,23 @@
  * Enables the host-side Windows IME (e.g. Microsoft Pinyin running inside
  * msrdc.exe) to compose text and inject the committed string into the
  * focused Wayland surface, mirroring what WSA does for Android.  The
- * client side is msrdc's built-in "remotetextplugin" (in mstscax.dll),
- * enabled by the RDP file property "redirecttextprocessing:i:1".
+ * client side is the WSL::TextBridge component of WSLDVCPlugin.dll
+ * (our fork of the open-source WSLg plugin), which creates a
+ * RemoteTextConnection with IsEnabled=true; msrdc's built-in
+ * remotetextplugin would keep integration disabled (product gate) and
+ * already holds the spec channel names, so the bridge listens on
+ * custom names instead.
  *
  * Transport: two dynamic virtual channels opened by this server via
  * WTSVirtualChannelOpenEx(WTS_CHANNEL_OPTION_DYNAMIC):
- *   - "TextInput_ServerToClientDVC": server -> client
- *   - "TextInput_ClientToServerDVC": client -> server
+ *   - "WSL::TextBridge::ServerToClient": server -> client
+ *   - "WSL::TextBridge::ClientToServer": client -> server
  *
  * Handshake sequence (MS-RDPETXT section 1.7 / 3.1.5):
  *
  *   weston                                   msrdc.exe
- *     |-- DYNVC CREATE "TextInput_...S2C" -->|
- *     |-- DYNVC CREATE "TextInput_...C2S" -->|
+ *     |-- DYNVC CREATE "WSL::...S2C" ------->|
+ *     |-- DYNVC CREATE "WSL::...C2S" ------->|
  *     |<-- CREATE_RESPONSE (join) -----------|   (dvc_open_state SUCCEEDED)
  *     |-- NOTIFY_SERVER_VERSION 0x031A ----->|
  *     |<-- NOTIFY_CLIENT_VERSION 0x0604 -----|
