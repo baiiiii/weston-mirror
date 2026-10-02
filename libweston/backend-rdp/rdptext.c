@@ -209,9 +209,8 @@ rdptext_hex_dump(struct rdptext_state *t, const unsigned char *data,
 	(void)t;
 	for (i = 0; i < n; i++)
 		snprintf(buf + 3 * i, 4, "%02X ", data[i]);
-	buf[3 * n] = ' ';
-	weston_log("rdptext:   bytes: %s (%zu bytes total)
-", buf, len);
+	buf[3 * n] = '\0';
+	weston_log("rdptext:   bytes: %s (%zu bytes total)\n", buf, len);
 }
 
 /* ------------------------------------------------------------------ */
