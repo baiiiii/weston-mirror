@@ -51,7 +51,8 @@ jobs:
             -Dremoting=false -Dpipewire=false \
             -Dshell-fullscreen=false -Dshell-ivi=false -Dshell-kiosk=false \
             -Ddemo-clients=false -Dsimple-clients=[] -Dtools=[] \
-            -Dresize-pool=false -Dwcap-decode=false -Dtest-junit-xml=false
+            -Dresize-pool=false -Dwcap-decode=false -Dtest-junit-xml=false \
+            -Dweston-launch=false
 
       - name: Build
         run: ninja -C build
