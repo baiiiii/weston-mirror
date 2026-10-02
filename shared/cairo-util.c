@@ -496,12 +496,34 @@ theme_render_frame(struct theme *t,
 	cairo_surface_t *source;
 	int x, y, margin, top_margin;
 	int text_width, text_height;
+	bool titlebar_only = flags & THEME_FRAME_TITLEBAR_ONLY;
+	bool dark = flags & THEME_FRAME_DARK;
 
 	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
 	cairo_set_source_rgba(cr, 0, 0, 0, 0);
 	cairo_paint(cr);
 
-	if (flags & THEME_FRAME_MAXIMIZED)
+	if (flags & THEME_FRAME_BORDERLESS)
+		return;
+
+	if (titlebar_only) {
+		margin = 0;
+		top_margin = t->titlebar_height;
+		cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+		if (dark) {
+			if (flags & THEME_FRAME_ACTIVE)
+				cairo_set_source_rgba(cr, 0.10, 0.11, 0.13, 1);
+			else
+				cairo_set_source_rgba(cr, 0.15, 0.16, 0.18, 1);
+		} else {
+			if (flags & THEME_FRAME_ACTIVE)
+				cairo_set_source_rgba(cr, 0.93, 0.94, 0.95, 1);
+			else
+				cairo_set_source_rgba(cr, 0.86, 0.87, 0.88, 1);
+		}
+		cairo_rectangle(cr, 0, 0, width, top_margin);
+		cairo_fill(cr);
+	} else if (flags & THEME_FRAME_MAXIMIZED)
 		margin = 0;
 	else {
 		render_shadow(cr, t->shadow,
@@ -515,15 +537,17 @@ theme_render_frame(struct theme *t,
 	else
 		source = t->inactive_frame;
 
-	if (title || !wl_list_empty(buttons))
-		top_margin = t->titlebar_height;
-	else
-		top_margin = t->width;
+	if (!titlebar_only) {
+		if (title || !wl_list_empty(buttons))
+			top_margin = t->titlebar_height;
+		else
+			top_margin = t->width;
 
-	tile_source(cr, source,
-		    margin, margin,
-		    width - margin * 2, height - margin * 2,
-		    t->width, top_margin);
+		tile_source(cr, source,
+			    margin, margin,
+			    width - margin * 2, height - margin * 2,
+			    t->width, top_margin);
+	}
 
 	if (title || !wl_list_empty(buttons)) {
 
@@ -565,7 +589,14 @@ theme_render_frame(struct theme *t,
 		else if (x + text_width > (title_rect->x + title_rect->width))
 			x = (title_rect->x + title_rect->width) - text_width;
 
-		if (flags & THEME_FRAME_ACTIVE) {
+		if (titlebar_only) {
+			cairo_move_to(cr, x, y);
+			if (dark)
+				cairo_set_source_rgb(cr, 0.94, 0.95, 0.96);
+			else
+				cairo_set_source_rgb(cr, 0.08, 0.09, 0.10);
+			SHOW_TEXT(cr);
+		} else if (flags & THEME_FRAME_ACTIVE) {
 			cairo_move_to(cr, x + 1, y  + 1);
 			cairo_set_source_rgb(cr, 1, 1, 1);
 			SHOW_TEXT(cr);
@@ -586,6 +617,22 @@ theme_get_location(struct theme *t, int x, int y,
 {
 	int vlocation, hlocation, location;
 	int margin, top_margin, grip_size;
+
+	if (flags & THEME_FRAME_BORDERLESS) {
+		if (x < 0 || y < 0 || x >= width || y >= height)
+			return THEME_LOCATION_EXTERIOR;
+
+		return THEME_LOCATION_CLIENT_AREA;
+	}
+
+	if (flags & THEME_FRAME_TITLEBAR_ONLY) {
+		if (x < 0 || y < 0 || x >= width || y >= height)
+			return THEME_LOCATION_EXTERIOR;
+		if (y < t->titlebar_height)
+			return THEME_LOCATION_TITLEBAR;
+
+		return THEME_LOCATION_CLIENT_AREA;
+	}
 
 	if (flags & THEME_FRAME_MAXIMIZED) {
 		margin = 0;

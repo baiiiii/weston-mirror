@@ -152,6 +152,8 @@ struct weston_wm {
 		xcb_atom_t		 window;
 		xcb_atom_t		 text_plain_utf8;
 		xcb_atom_t		 text_plain;
+		xcb_atom_t		 image_png;
+		xcb_atom_t		 image_bmp;
 		xcb_atom_t		 xdnd_selection;
 		xcb_atom_t		 xdnd_aware;
 		xcb_atom_t		 xdnd_enter;

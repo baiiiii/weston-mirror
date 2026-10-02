@@ -733,6 +733,9 @@ weston_wm_window_get_frame_size(struct weston_wm_window *window,
 	} else if (window->decorate && window->frame) {
 		*width = frame_width(window->frame);
 		*height = frame_height(window->frame);
+	} else if (window->frame) {
+		*width = window->width;
+		*height = window->height;
 	} else {
 		*width = window->width + t->margin * 2;
 		*height = window->height + t->margin * 2;
@@ -750,6 +753,9 @@ weston_wm_window_get_child_position(struct weston_wm_window *window,
 		*y = 0;
 	} else if (window->decorate && window->frame) {
 		frame_interior(window->frame, x, y, NULL, NULL);
+	} else if (window->frame) {
+		*x = 0;
+		*y = 0;
 	} else {
 		*x = t->margin;
 		*y = t->margin;
@@ -891,7 +897,7 @@ weston_wm_handle_configure_request(struct weston_wm *wm, xcb_generic_event_t *ev
 
 	wm_printf(wm, "XCB_CONFIGURE_REQUEST (window %d) frame %d%s%s\n",
 		  configure_request->window,
-		  window->frame_id, 
+		  window->frame_id,
 		  window->fullscreen ? ", fullscreen" : "",
 		  window->override_redirect ? ", override" : "");
 
@@ -952,7 +958,7 @@ weston_wm_handle_configure_request(struct weston_wm *wm, xcb_generic_event_t *ev
 		if (configure_request->value_mask & XCB_CONFIG_WINDOW_X)
 			window->x = configure_request->x;
 		if (configure_request->value_mask & XCB_CONFIG_WINDOW_Y)
-			window->y = configure_request->y; 
+			window->y = configure_request->y;
 	} else if (window->shsurf &&
 		   configure_request->value_mask & (XCB_CONFIG_WINDOW_X|XCB_CONFIG_WINDOW_Y)) {
 		xwayland_api->move_position(window->shsurf,
@@ -1013,6 +1019,19 @@ weston_wm_handle_configure_notify(struct weston_wm *wm, xcb_generic_event_t *eve
 
 	if (!wm_lookup_window(wm, configure_notify->window, &window))
 		return;
+
+	/* 带 frame 的 X11 窗口会同时用 client window id 和 frame window id
+	 * 指向同一个 weston_wm_window。frame window 的 ConfigureNotify 是
+	 * root 坐标，才是后续 remap 应使用的权威位置；reparent 后的 client
+	 * window ConfigureNotify 是相对 frame 的子窗口偏移，常见为 (0,0)。
+	 * 如果在这里接受该相对坐标，会污染 window->x/y，导致下一次
+	 * MapRequest 把窗口映射到错误的 root 位置。
+	 */
+	if (window->frame && !window->override_redirect && !is_our_resource) {
+		wm_printf(wm, "XCB_CONFIGURE_NOTIFY (window %d) ignored, framed child relative position\n",
+			  configure_notify->window);
+		return;
+	}
 
 	window->x = configure_notify->x;
 	window->y = configure_notify->y;
@@ -1281,6 +1300,10 @@ weston_wm_window_create_frame(struct weston_wm_window *window)
 	if (!window->frame)
 		return;
 
+	frame_set_flag(window->frame,
+		       FRAME_FLAG_TITLEBAR_ONLY |
+		       FRAME_FLAG_DARK |
+		       FRAME_FLAG_MENU_TOGGLES_THEME);
 	frame_resize_inside(window->frame, window->width, window->height);
 
 	weston_wm_window_get_frame_size(window, &width, &height);
@@ -1313,6 +1336,12 @@ weston_wm_window_create_frame(struct weston_wm_window *window)
 			  XCB_CW_BORDER_PIXEL |
 			  XCB_CW_EVENT_MASK |
 			  XCB_CW_COLORMAP, values);
+
+	/* Force the first send_position() to configure the frame window.
+	 * The frame starts at SHRT_MIN/SHRT_MIN for non-OR windows, and a
+	 * matching view position would otherwise skip the initial configure. */
+	if (!window->override_redirect)
+		window->pos_dirty = true;
 
 	xcb_reparent_window(wm->conn, window->id, window->frame_id, x, y);
 
@@ -1556,6 +1585,11 @@ weston_wm_window_set_pending_state(struct weston_wm_window *window)
 	} else if (window->decorate && window->frame) {
 		frame_input_rect(window->frame, &input_x, &input_y,
 				 &input_w, &input_h);
+	} else if (window->frame) {
+		input_x = 0;
+		input_y = 0;
+		input_w = window->width;
+		input_h = window->height;
 	} else {
 		input_x = t->margin;
 		input_y = t->margin;
@@ -2494,6 +2528,14 @@ weston_wm_handle_button(struct weston_wm *wm, xcb_generic_event_t *event)
 		location = frame_pointer_button(window->frame, NULL,
 						button_id, button_state);
 
+	if (frame_status(window->frame) & FRAME_STATUS_THEME) {
+		if (frame_get_flag(window->frame, FRAME_FLAG_DARK))
+			frame_unset_flag(window->frame, FRAME_FLAG_DARK);
+		else
+			frame_set_flag(window->frame, FRAME_FLAG_DARK);
+		frame_status_clear(window->frame, FRAME_STATUS_THEME);
+	}
+
 	if (frame_status(window->frame) & FRAME_STATUS_REPAINT)
 		weston_wm_window_schedule_repaint(window);
 
@@ -2815,6 +2857,8 @@ weston_wm_get_resources(struct weston_wm *wm)
 		{ "WINDOW",		F(atom.window) },
 		{ "text/plain;charset=utf-8",	F(atom.text_plain_utf8) },
 		{ "text/plain",		F(atom.text_plain) },
+		{ "image/png",		F(atom.image_png) },
+		{ "image/bmp",		F(atom.image_bmp) },
 		{ "XdndSelection",	F(atom.xdnd_selection) },
 		{ "XdndAware",		F(atom.xdnd_aware) },
 		{ "XdndEnter",		F(atom.xdnd_enter) },
@@ -3122,18 +3166,19 @@ send_configure(struct weston_surface *surface, int32_t width, int32_t height)
 {
 	struct weston_wm_window *window = get_wm_window(surface);
 	struct weston_wm *wm;
-	struct theme *t;
 	int new_width, new_height;
 	int vborder, hborder;
+	int32_t top = 0, bottom = 0, left = 0, right = 0;
 
 	if (!window || !window->wm)
 		return;
 	wm = window->wm;
-	t = wm->theme;
 
-	if (window->decorate && !window->fullscreen) {
-		hborder = 2 * t->width;
-		vborder = t->titlebar_height + t->width;
+	if (window->decorate && !window->fullscreen && window->frame) {
+		frame_decoration_sizes(window->frame, &top, &bottom,
+				       &left, &right);
+		hborder = left + right;
+		vborder = top + bottom;
 	} else {
 		hborder = 0;
 		vborder = 0;
@@ -3296,6 +3341,43 @@ close_window(struct weston_surface *surface)
 {
 	struct weston_wm_window *window = get_wm_window(surface);
 	weston_wm_window_close(window, XCB_TIME_CURRENT_TIME);
+}
+
+static bool
+get_borderless(struct weston_surface *surface)
+{
+	struct weston_wm_window *window = get_wm_window(surface);
+
+	if (!window || !window->frame)
+		return true;
+
+	return frame_get_flag(window->frame, FRAME_FLAG_BORDERLESS);
+}
+
+static void
+set_borderless(struct weston_surface *surface, bool borderless)
+{
+	struct weston_wm_window *window = get_wm_window(surface);
+
+	if (!window || !window->frame)
+		return;
+
+	if (frame_get_flag(window->frame, FRAME_FLAG_BORDERLESS) == borderless)
+		return;
+
+	if (borderless)
+		frame_set_flag(window->frame, FRAME_FLAG_BORDERLESS);
+	else
+		frame_unset_flag(window->frame, FRAME_FLAG_BORDERLESS);
+
+	frame_resize_inside(window->frame, window->width, window->height);
+	weston_wm_window_configure(window);
+}
+
+static void
+toggle_borderless(struct weston_surface *surface)
+{
+	set_borderless(surface, !get_borderless(surface));
 }
 
 static const struct weston_xwayland_client_interface shell_client = {
@@ -3497,4 +3579,7 @@ const struct weston_xwayland_surface_api surface_api = {
 	get_class_name,
 	trigger_set_window_icon,
 	close_window,
+	get_borderless,
+	set_borderless,
+	toggle_borderless,
 };

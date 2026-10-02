@@ -49,6 +49,7 @@
 #include <libweston/libweston.h>
 #include <libweston/backend.h>
 #include <libweston/backend-rdp.h>
+#include <libweston/xwayland-api.h>
 
 struct focus_state {
 	struct desktop_shell *shell;
@@ -580,7 +581,7 @@ shell_grab_start(struct shell_grab *grab,
 	weston_pointer_start_grab(pointer, &grab->grab);
 
 	if (shell->is_localmove_supported &&
-		(interface == &move_grab_interface) && 
+		(interface == &move_grab_interface) &&
 		shell->rdprail_api->start_window_move) {
 
 		shell->is_localmove_pending = true;
@@ -601,7 +602,7 @@ shell_grab_end(struct shell_grab *grab)
 	if (grab->shsurf) {
 		struct desktop_shell* shell = grab->shsurf->shell;
 		struct weston_surface* surface =
-		weston_desktop_surface_get_surface(grab->shsurf->desktop_surface);		
+		weston_desktop_surface_get_surface(grab->shsurf->desktop_surface);
 
 		wl_list_remove(&grab->shsurf_destroy_listener.link);
 		grab->shsurf->grabbed = 0;
@@ -609,10 +610,10 @@ shell_grab_end(struct shell_grab *grab)
 		if (shell->is_localmove_supported &&
 			(grab->grab.interface == &move_grab_interface) &&
 			shell->rdprail_api->end_window_move) {
-			
+
 			grab->shsurf->snapped.last_grab_x = wl_fixed_to_int(grab->grab.pointer->x);
 			grab->shsurf->snapped.last_grab_y = wl_fixed_to_int(grab->grab.pointer->y);
-			
+
 			shell->rdprail_api->end_window_move(surface);
 		}
 
@@ -620,7 +621,7 @@ shell_grab_end(struct shell_grab *grab)
 			grab->shsurf->resize_edges = 0;
 		} else {
 			/* This is nessesary to make "double check" on title bar to max/restore
-			   with X applications. When title bar is clicked first time, Xwayland 
+			   with X applications. When title bar is clicked first time, Xwayland
 			   enters "grab_move" (see where FRAME_STATUS_MOVE), and when left button
 			   is released, grab_move ends. On desktop-shell, when entered grab_move,
 			   the focus is moved to shell "grab_surface" (see desktop-shell/shell.c:
@@ -1330,7 +1331,7 @@ surface_move(struct shell_surface *shsurf, struct weston_pointer *pointer,
 
 	if (shsurf->grabbed ||
 	    weston_desktop_surface_get_fullscreen(shsurf->desktop_surface)/* ||
-	    // RAIL shell to allow unmaximize by dragging title bar 
+	    // RAIL shell to allow unmaximize by dragging title bar
 	    weston_desktop_surface_get_maximized(shsurf->desktop_surface) */)
 		return 0;
 
@@ -1867,7 +1868,7 @@ unset_maximized(struct shell_surface *shsurf)
 		weston_desktop_surface_set_size(
 			shsurf->desktop_surface,
 			shsurf->snapped.saved_width, shsurf->snapped.saved_height);
-		weston_view_set_position(shsurf->view, 
+		weston_view_set_position(shsurf->view,
 			shsurf->snapped.saved_x, shsurf->snapped.saved_y);
 		shsurf->snapped.is_snapped = false;
 		rail_state->isWindowSnapped = false;
@@ -1990,7 +1991,7 @@ grab_unsnap_motion(struct weston_pointer_grab *grab)
 			  shsurf->snapped.saved_width;
 	geometry_offset /= 2;
 
-	/* Reposition the window such that the mouse remain within the 
+	/* Reposition the window such that the mouse remain within the
 	 * new bound of the window after resize. */
 	/* calc based on pointer position based on current (snapped) window size */
 	/* move->dx is offset of pointer position from window origin */
@@ -2048,7 +2049,7 @@ grab_unmaximized_motion(struct weston_pointer_grab *grab)
 			  shsurf->maximized.saved_width;
 	geometry_offset /= 2;
 
-	/* Reposition the window such that the mouse remain within the 
+	/* Reposition the window such that the mouse remain within the
 	 * new bound of the window after resize. */
 	/* calc based on pointer position based on current (maximized) window size */
 	/* move->dx is offset of pointer position from window origin */
@@ -2578,7 +2579,7 @@ set_default_position_from_parent(struct shell_surface *shsurf)
 	y += shsurf->parent->view->geometry.y;
 
 	shell_rdp_debug_verbose(shsurf->shell, "%s: view:%p, (%d, %d)\n",
-				__func__, shsurf->view, x, y); 
+				__func__, shsurf->view, x, y);
 
 	weston_view_set_position(shsurf->view, x, y);
 }
@@ -2998,7 +2999,7 @@ shell_backend_request_window_maximize(struct weston_surface *surface)
 
 	if (shsurf->shell->is_localmove_pending) {
 		/* Delay maximizing the surface until the move ends. The client
-		 * will send up a snap request once the move ends, we'll 
+		 * will send up a snap request once the move ends, we'll
 		 * maximize the window at that time once we know which monitor
 		 * to maximize on.
 		 */
@@ -3040,7 +3041,7 @@ shell_backend_request_window_restore(struct weston_surface *surface)
 		weston_desktop_surface_set_size(
 			shsurf->desktop_surface,
 			shsurf->snapped.saved_width, shsurf->snapped.saved_height);
-		weston_view_set_position(shsurf->view, 
+		weston_view_set_position(shsurf->view,
 			shsurf->snapped.saved_x, shsurf->snapped.saved_y);
 		shsurf->snapped.is_snapped = false;
 		rail_state->isWindowSnapped = false;
@@ -3116,15 +3117,15 @@ shell_backend_request_window_snap(struct weston_surface *surface, int x, int y, 
 
 	if (shsurf->snapped.is_maximized_requested) {
 		assert(!shsurf->shell->is_localmove_pending);
-		
+
 		shsurf->snapped.is_maximized_requested = false;
 
 		/* We may need to pick a new output for the window
 		 * based on the last position of the mouse when the
 		 * grab event finished.
 		 */
-		struct weston_output *output = get_output_containing(shsurf->shell, 
-				shsurf->snapped.last_grab_x, 
+		struct weston_output *output = get_output_containing(shsurf->shell,
+				shsurf->snapped.last_grab_x,
 				shsurf->snapped.last_grab_y,
 				true);
 
@@ -3325,7 +3326,7 @@ desktop_surface_get_position(struct weston_desktop_surface *surface,
 }
 
 static bool
-area_contain_point(pixman_rectangle32_t *area, int x, int y) 
+area_contain_point(pixman_rectangle32_t *area, int x, int y)
 {
 	return x >= area->x &&
 	       y >= area->y &&
@@ -3576,8 +3577,127 @@ resize_binding(struct weston_pointer *pointer, const struct timespec *time,
 	else
 		edges |= WL_SHELL_SURFACE_RESIZE_BOTTOM;
 
+	if (edges == WL_SHELL_SURFACE_RESIZE_NONE) {
+		int32_t right = surface->width - x;
+		int32_t bottom = surface->height - y;
+		int32_t nearest = x;
+
+		edges = WL_SHELL_SURFACE_RESIZE_LEFT;
+		if (right < nearest) {
+			nearest = right;
+			edges = WL_SHELL_SURFACE_RESIZE_RIGHT;
+		}
+		if (y < nearest) {
+			nearest = y;
+			edges = WL_SHELL_SURFACE_RESIZE_TOP;
+		}
+		if (bottom < nearest)
+			edges = WL_SHELL_SURFACE_RESIZE_BOTTOM;
+	}
+
 	shell_rdp_debug_verbose(shsurf->shell, "%s edges:%x\n", __func__, edges);
 	surface_resize(shsurf, pointer, edges);
+}
+
+static bool
+surface_is_xwayland(struct weston_surface *surface)
+{
+	const struct weston_xwayland_surface_api *api;
+
+	if (!surface)
+		return false;
+
+	api = weston_xwayland_surface_get_api(surface->compositor);
+	if (!api || !api->is_xwayland_surface)
+		return false;
+
+	return api->is_xwayland_surface(surface);
+}
+
+static struct shell_surface *
+get_focused_xwayland_shell_surface(struct weston_surface *focus,
+				   struct weston_surface **main_surface)
+{
+	struct weston_surface *surface;
+
+	if (!focus)
+		return NULL;
+
+	surface = weston_surface_get_main_surface(focus);
+	if (!surface || !surface_is_xwayland(surface))
+		return NULL;
+
+	if (main_surface)
+		*main_surface = surface;
+
+	return get_shell_surface(surface);
+}
+
+static void
+xwayland_resize_binding(struct weston_pointer *pointer,
+			const struct timespec *time,
+			uint32_t button, void *data)
+{
+	if (!pointer->focus ||
+	    !get_focused_xwayland_shell_surface(pointer->focus->surface, NULL))
+		return;
+
+	resize_binding(pointer, time, button, data);
+}
+
+static void
+xwayland_move_binding(struct weston_pointer *pointer,
+		      const struct timespec *time,
+		      uint32_t button, void *data)
+{
+	if (!pointer->focus ||
+	    !get_focused_xwayland_shell_surface(pointer->focus->surface, NULL))
+		return;
+
+	move_binding(pointer, time, button, data);
+}
+
+static void
+xwayland_maximize_binding(struct weston_keyboard *keyboard,
+			  const struct timespec *time,
+			  uint32_t key, void *data)
+{
+	const struct weston_xwayland_surface_api *api;
+	struct weston_surface *surface = NULL;
+	struct shell_surface *shsurf;
+
+	shsurf = get_focused_xwayland_shell_surface(keyboard->focus, &surface);
+	if (!shsurf)
+		return;
+
+	api = weston_xwayland_surface_get_api(surface->compositor);
+	if (!api || !api->set_maximized)
+		return;
+
+	shell_rdp_debug_verbose(shsurf->shell, "%s\n", __func__);
+	api->set_maximized(surface,
+			   !weston_desktop_surface_get_maximized(shsurf->desktop_surface));
+}
+
+static void
+xwayland_toggle_borderless_binding(struct weston_keyboard *keyboard,
+				   const struct timespec *time,
+				   uint32_t key, void *data)
+{
+	const struct weston_xwayland_surface_api *api;
+	struct weston_surface *surface = NULL;
+	struct shell_surface *shsurf;
+
+	shsurf = get_focused_xwayland_shell_surface(keyboard->focus, &surface);
+	if (!shsurf)
+		return;
+
+	api = weston_xwayland_surface_get_api(surface->compositor);
+	if (!api || !api->toggle_borderless)
+		return;
+
+	shell_rdp_debug_verbose(shsurf->shell, "%s\n", __func__);
+	api->toggle_borderless(surface);
 }
 
 static void
@@ -4023,7 +4143,7 @@ shell_backend_request_window_activate(void *shell_context, struct weston_seat *s
 	if (!shsurf)
 		return;
 
-	activate_binding(seat, shell, view, 
+	activate_binding(seat, shell, view,
 			 WESTON_ACTIVATE_FLAG_CLICKED |
 			 WESTON_ACTIVATE_FLAG_CONFIGURE);
 }
@@ -4175,7 +4295,7 @@ weston_view_set_initial_position(struct shell_surface *shsurf)
 		y += random() % range_y;
 
 	shell_rdp_debug_verbose(shell, "%s: view:%p, (%d, %d)\n",
-				__func__, view, x, y); 
+				__func__, view, x, y);
 
 	weston_view_set_position(view, x, y);
 }
@@ -4416,7 +4536,7 @@ shell_reposition_view_on_output_change(struct weston_view *view)
 		return;
 
 	shsurf->saved_position_valid = false;
-	//this sets window size to 0x0 when output is removed. 
+	//this sets window size to 0x0 when output is removed.
 	//set_maximized(shsurf, false);
 	//set_fullscreen(shsurf, false, NULL);
 }
@@ -4610,6 +4730,16 @@ shell_add_bindings(struct weston_compositor *ec, struct desktop_shell *shell)
 					    touch_to_activate_binding,
 					    shell);
 
+	weston_compositor_add_key_binding(ec, KEY_F11, MODIFIER_ALT,
+					  xwayland_maximize_binding, shell);
+	weston_compositor_add_key_binding(ec, KEY_F12, MODIFIER_ALT,
+					  xwayland_toggle_borderless_binding,
+					  shell);
+	weston_compositor_add_button_binding(ec, BTN_LEFT, MODIFIER_ALT,
+					     xwayland_resize_binding, shell);
+	weston_compositor_add_button_binding(ec, BTN_RIGHT, MODIFIER_ALT,
+					     xwayland_move_binding, shell);
+
 	mod = shell->binding_modifier;
 	if (!mod)
 		return;
@@ -4622,11 +4752,13 @@ shell_add_bindings(struct weston_compositor *ec, struct desktop_shell *shell)
 					  maximize_binding, NULL);
 	weston_compositor_add_key_binding(ec, KEY_F, mod | MODIFIER_SHIFT,
 					  fullscreen_binding, NULL);
-	weston_compositor_add_button_binding(ec, BTN_LEFT, mod, move_binding,
-					     shell);
+	if (mod != MODIFIER_ALT)
+		weston_compositor_add_button_binding(ec, BTN_LEFT, mod,
+						     move_binding, shell);
 	weston_compositor_add_touch_binding(ec, mod, touch_move_binding, shell);
-	weston_compositor_add_button_binding(ec, BTN_RIGHT, mod,
-					     resize_binding, shell);
+	if (mod != MODIFIER_ALT)
+		weston_compositor_add_button_binding(ec, BTN_RIGHT, mod,
+						     resize_binding, shell);
 	weston_compositor_add_button_binding(ec, BTN_LEFT,
 					     mod | MODIFIER_SHIFT,
 					     resize_binding, shell);
@@ -4698,7 +4830,7 @@ shell_reposition_view_on_workarea_change(struct weston_view *view, void *data)
 		int new_workarea_width = (int)workarea_change->new_workarea.width;
 		int x = (int)view->geometry.x - view->output->x;
 		if (x + (new_workarea_width / 10) > new_workarea_width) {
-			x += (new_workarea_width - workarea_change->old_workarea.width); 
+			x += (new_workarea_width - workarea_change->old_workarea.width);
 			if (x < 0)
 				x = 0;
 			else if (x > workarea_change->new_workarea.x + new_workarea_width)
@@ -4709,7 +4841,7 @@ shell_reposition_view_on_workarea_change(struct weston_view *view, void *data)
 		int new_workarea_height = (int)workarea_change->new_workarea.height;
 		int y = (int)view->geometry.y - view->output->y;
 		if (y + (new_workarea_height / 10) > new_workarea_height) {
-			y += (new_workarea_height - workarea_change->old_workarea.height); 
+			y += (new_workarea_height - workarea_change->old_workarea.height);
 			if (y < 0)
 				y = 0;
 			else if (y > workarea_change->new_workarea.y + new_workarea_height)
@@ -4746,7 +4878,7 @@ shell_backend_set_desktop_workarea(struct weston_output *output, void *context, 
 	if (shell_output) {
 		struct shell_workarea_change workarea_change;
 		workarea_change.output = output;
-		workarea_change.old_workarea = shell_output->desktop_workarea; 
+		workarea_change.old_workarea = shell_output->desktop_workarea;
 		workarea_change.new_workarea = *workarea;
 
 		shell_output->desktop_workarea = *workarea;
@@ -4759,9 +4891,9 @@ shell_backend_get_app_id(void *shell_context, struct weston_surface *surface, ch
 {
 	struct desktop_shell *shell = (struct desktop_shell *)shell_context;
 	struct weston_desktop_surface *desktop_surface;
-	struct weston_surface_rail_state *rail_state; 
+	struct weston_surface_rail_state *rail_state;
 	struct shell_surface *shsurf;
-	const struct weston_xwayland_surface_api *api; 
+	const struct weston_xwayland_surface_api *api;
 	pid_t pid;
 	const char *id;
 	char *class_name;
@@ -4781,7 +4913,7 @@ shell_backend_get_app_id(void *shell_context, struct weston_surface *surface, ch
 		return -1;
 
 	shsurf = weston_desktop_surface_get_user_data(desktop_surface);
-	if (!shsurf) 
+	if (!shsurf)
 		return -1;
 
 	rail_state = (struct weston_surface_rail_state *)surface->backend_state;
@@ -4806,7 +4938,7 @@ shell_backend_get_app_id(void *shell_context, struct weston_surface *surface, ch
 	/* if not, obtain application id specified via wayland interface */
 	if (app_id[0] == '\0') {
 		id = weston_desktop_surface_get_app_id(desktop_surface);
-		if (id) 
+		if (id)
 			strncpy(app_id, id, app_id_size);
 	}
 

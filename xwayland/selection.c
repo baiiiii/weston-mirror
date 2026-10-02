@@ -340,17 +340,48 @@ weston_wm_send_selection_notify(struct weston_wm *wm, xcb_atom_t property)
 	xcb_flush(wm->conn);
 }
 
+static int
+weston_wm_selection_has_mime_type(struct weston_wm *wm, const char *mime_type)
+{
+	struct weston_seat *seat = weston_wm_pick_seat(wm);
+	struct weston_data_source *source;
+	char **p;
+
+	if (!seat)
+		return 0;
+
+	source = seat->selection_data_source;
+	if (!source)
+		return 0;
+
+	wl_array_for_each(p, &source->mime_types) {
+		if (strcmp(*p, mime_type) == 0)
+			return 1;
+	}
+
+	return 0;
+}
+
 static void
 weston_wm_send_targets(struct weston_wm *wm)
 {
-	xcb_atom_t targets[] = {
-		wm->atom.timestamp,
-		wm->atom.targets,
-		wm->atom.utf8_string,
+	xcb_atom_t targets[6];
+	uint32_t num_targets = 0;
+
+	targets[num_targets++] = wm->atom.timestamp;
+	targets[num_targets++] = wm->atom.targets;
+
+	if (weston_wm_selection_has_mime_type(wm, "image/png"))
+		targets[num_targets++] = wm->atom.image_png;
+	if (weston_wm_selection_has_mime_type(wm, "image/bmp"))
+		targets[num_targets++] = wm->atom.image_bmp;
+
+	if (weston_wm_selection_has_mime_type(wm, "text/plain;charset=utf-8")) {
+		targets[num_targets++] = wm->atom.utf8_string;
 		/* wm->atom.compound_text, */
-		wm->atom.text,
+		targets[num_targets++] = wm->atom.text;
 		/* wm->atom.string */
-	};
+	}
 
 	xcb_change_property(wm->conn,
 			    XCB_PROP_MODE_REPLACE,
@@ -358,7 +389,7 @@ weston_wm_send_targets(struct weston_wm *wm)
 			    wm->selection_request.property,
 			    XCB_ATOM_ATOM,
 			    32, /* format */
-			    ARRAY_LENGTH(targets), targets);
+			    num_targets, targets);
 
 	weston_wm_send_selection_notify(wm, wm->selection_request.property);
 }
@@ -629,8 +660,12 @@ weston_wm_handle_selection_request(struct weston_wm *wm,
 		   selection_request->target == wm->atom.text) {
 		weston_wm_send_data(wm, wm->atom.utf8_string,
 				  "text/plain;charset=utf-8");
+	} else if (selection_request->target == wm->atom.image_png) {
+		weston_wm_send_data(wm, wm->atom.image_png, "image/png");
+	} else if (selection_request->target == wm->atom.image_bmp) {
+		weston_wm_send_data(wm, wm->atom.image_bmp, "image/bmp");
 	} else {
-		weston_log("can only handle UTF8_STRING targets...\n");
+		weston_log("can only handle UTF8_STRING and image targets...\n");
 		weston_wm_send_selection_notify(wm, XCB_ATOM_NONE);
 	}
 }

@@ -30,6 +30,7 @@
 extern "C" {
 #endif
 
+#include <stdbool.h>
 #include <unistd.h>
 
 #include <libweston/plugin-registry.h>
@@ -177,6 +178,25 @@ struct weston_xwayland_surface_api {
 	 */
 	void
 	(*close_window)(struct weston_surface *surface);
+	/** Check whether the Xwayland server-side decoration is borderless.
+	 *
+	 * \param surface The Xwayland surface.
+	 */
+	bool
+	(*get_borderless)(struct weston_surface *surface);
+	/** Set the Xwayland server-side decoration borderless state.
+	 *
+	 * \param surface The Xwayland surface.
+	 * \param borderless Whether to hide all server-side decoration.
+	 */
+	void
+	(*set_borderless)(struct weston_surface *surface, bool borderless);
+	/** Toggle the Xwayland server-side decoration borderless state.
+	 *
+	 * \param surface The Xwayland surface.
+	 */
+	void
+	(*toggle_borderless)(struct weston_surface *surface);
 };
 
 /** Retrieve the API object for the libweston Xwayland surface.

@@ -34,6 +34,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <stdio.h>
+#include <png.h>
 
 #include "rdp.h"
 
@@ -49,6 +50,14 @@
 static const char rdp_clipboard_html_header[] = "Version:0.9\r\nStartHTML:-1\r\nEndHTML:-1\r\nStartFragment:00000000\r\nEndFragment:00000000\r\n";
 #define RDP_CLIPBOARD_FRAGMENT_START_OFFSET (53) //---------------------------------------------------------+                       |
 #define RDP_CLIPBOARD_FRAGMENT_END_OFFSET (75) //-----------------------------------------------------------------------------------+
+
+/* 大文本粘贴优化：F_SETPIPE_SZ 兜底定义（Linux 2.6.35+ 支持） */
+#ifndef F_SETPIPE_SZ
+#define F_SETPIPE_SZ 1031
+#endif
+/* 大文本粘贴优化常量 */
+#define RDP_CLIPBOARD_PIPE_BUF_MIN_SIZE (256 * 1024) /* pipe 缓冲区最小值 256KB */
+#define RDP_CLIPBOARD_MAX_WRITE_PER_CALLBACK (64 * 1024) /* 每次事件循环回调最大写入 64KB */
 
 /*
  * https://docs.microsoft.com/en-us/windows/win32/dataxchg/html-clipboard-format
@@ -68,8 +77,14 @@ struct rdp_clipboard_supported_format {
 	uint32_t format_id;
 	char *format_name;
 	char *mime_type;
+	uint32_t direction_flags;
 	pfn_process_data pfn;
 };
+
+#define RDP_CLIPBOARD_FORMAT_TO_CLIENT   (1U << 0) /* Linux to Windows */
+#define RDP_CLIPBOARD_FORMAT_FROM_CLIENT (1U << 1) /* Windows to Linux */
+#define RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL \
+	(RDP_CLIPBOARD_FORMAT_TO_CLIENT | RDP_CLIPBOARD_FORMAT_FROM_CLIENT)
 
 static bool
 clipboard_process_text_utf8(struct rdp_clipboard_data_source *source, bool is_send);
@@ -81,17 +96,21 @@ static bool
 clipboard_process_bmp(struct rdp_clipboard_data_source *source , bool is_send);
 
 static bool
+clipboard_process_png(struct rdp_clipboard_data_source *source, bool is_send);
+
+static bool
 clipboard_process_html(struct rdp_clipboard_data_source *source, bool is_send);
 
 /* TODO: need to support to 1:n or m:n format conversion.
  * For example, CF_UNICODETEXT to "UTF8_STRING" as well as "text/plain;charset=utf-8".
  */
 struct rdp_clipboard_supported_format clipboard_supported_formats[] = {
-	{ CF_UNICODETEXT,  NULL,               "text/plain;charset=utf-8", clipboard_process_text_utf8 },
-	{ CF_TEXT,         NULL,               "STRING",                   clipboard_process_text_raw  },
-	{ CF_DIB,          NULL,               "image/bmp",                clipboard_process_bmp       },
-	{ CF_PRIVATE_RTF,  "Rich Text Format", "text/rtf",                 clipboard_process_text_raw  },
-	{ CF_PRIVATE_HTML, "HTML Format",      "text/html",                clipboard_process_html      },
+	{ CF_UNICODETEXT,  NULL,               "text/plain;charset=utf-8", RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL, clipboard_process_text_utf8 },
+	{ CF_TEXT,         NULL,               "STRING",                   RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL, clipboard_process_text_raw  },
+	{ CF_DIB,          NULL,               "image/bmp",                RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL, clipboard_process_bmp       },
+	{ CF_DIB,          NULL,               "image/png",                RDP_CLIPBOARD_FORMAT_FROM_CLIENT,   clipboard_process_png       },
+	{ CF_PRIVATE_RTF,  "Rich Text Format", "text/rtf",                 RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL, clipboard_process_text_raw  },
+	{ CF_PRIVATE_HTML, "HTML Format",      "text/html",                RDP_CLIPBOARD_FORMAT_BIDIRECTIONAL, clipboard_process_html      },
 };
 #define RDP_NUM_CLIPBOARD_FORMATS ARRAY_LENGTH(clipboard_supported_formats)
 
@@ -584,6 +603,249 @@ error_return:
 	return false;
 }
 
+static uint32_t
+clipboard_read_u32(const void *data)
+{
+	uint32_t value;
+
+	memcpy(&value, data, sizeof(value));
+	return value;
+}
+
+static uint8_t
+clipboard_masked_channel_to_byte(uint32_t pixel, uint32_t mask)
+{
+	uint32_t shift = 0;
+	uint32_t max_value;
+	uint32_t value;
+
+	if (!mask)
+		return 0;
+
+	while ((mask & 1U) == 0) {
+		mask >>= 1;
+		shift++;
+	}
+
+	value = (pixel >> shift) & mask;
+	max_value = mask;
+	if (!max_value)
+		return 0;
+
+	return (uint8_t)((value * 255U + (max_value / 2U)) / max_value);
+}
+
+static void
+clipboard_png_write_data(png_structp png_ptr, png_bytep data, png_size_t length)
+{
+	struct wl_array *png_data = png_get_io_ptr(png_ptr);
+	void *dst;
+
+	if (!length)
+		return;
+
+	dst = wl_array_add(png_data, length);
+	if (!dst)
+		png_error(png_ptr, "failed to allocate png clipboard buffer");
+
+	memcpy(dst, data, length);
+}
+
+static void
+clipboard_png_flush_data(png_structp png_ptr)
+{
+	(void)png_ptr;
+}
+
+static bool
+clipboard_process_png(struct rdp_clipboard_data_source *source, bool is_send)
+{
+	freerdp_peer *client = (freerdp_peer *)source->context;
+	RdpPeerContext *ctx = (RdpPeerContext *)client->context;
+	struct rdp_backend *b = ctx->rdpBackend;
+	BITMAPINFOHEADER *bmih;
+	uint8_t *src;
+	uint8_t *bits;
+	uint8_t *row = NULL;
+	uint32_t red_mask = 0x00ff0000;
+	uint32_t green_mask = 0x0000ff00;
+	uint32_t blue_mask = 0x000000ff;
+	uint32_t width;
+	uint32_t height;
+	uint32_t bpp;
+	uint32_t header_size;
+	uint32_t mask_size = 0;
+	uint64_t stride;
+	uint64_t image_size;
+	size_t bits_offset;
+	size_t palette_size = 0;
+	size_t row_size;
+	struct wl_array data_contents;
+	png_structp png = NULL;
+	png_infop info = NULL;
+	bool top_down;
+
+	assert(!source->is_data_processed);
+
+	wl_array_init(&data_contents);
+
+	if (is_send)
+		goto error_return;
+
+	if (source->data_contents.size < sizeof(*bmih))
+		goto error_return;
+
+	src = source->data_contents.data;
+	bmih = (BITMAPINFOHEADER *)src;
+	header_size = bmih->biSize;
+	if (header_size < sizeof(*bmih) ||
+	    header_size > source->data_contents.size ||
+	    bmih->biPlanes != 1 ||
+	    bmih->biWidth <= 0 ||
+	    bmih->biHeight == 0 ||
+	    bmih->biHeight == INT32_MIN)
+		goto error_return;
+
+	bpp = bmih->biBitCount;
+	if (bpp != 24 && bpp != 32)
+		goto error_return;
+
+	width = bmih->biWidth;
+	height = bmih->biHeight < 0 ? -bmih->biHeight : bmih->biHeight;
+	top_down = bmih->biHeight < 0;
+
+	if (bmih->biCompression == BI_BITFIELDS) {
+		if (header_size == sizeof(*bmih)) {
+			if (source->data_contents.size < header_size + (sizeof(uint32_t) * 3))
+				goto error_return;
+
+			red_mask = clipboard_read_u32(src + header_size);
+			green_mask = clipboard_read_u32(src + header_size + sizeof(uint32_t));
+			blue_mask = clipboard_read_u32(src + header_size + (sizeof(uint32_t) * 2));
+			mask_size = sizeof(uint32_t) * 3;
+		} else if (header_size >= sizeof(*bmih) + (sizeof(uint32_t) * 3)) {
+			red_mask = clipboard_read_u32(src + sizeof(*bmih));
+			green_mask = clipboard_read_u32(src + sizeof(*bmih) + sizeof(uint32_t));
+			blue_mask = clipboard_read_u32(src + sizeof(*bmih) + (sizeof(uint32_t) * 2));
+		} else {
+			goto error_return;
+		}
+
+		if (!red_mask || !green_mask || !blue_mask)
+			goto error_return;
+	} else if (bmih->biCompression != BI_RGB) {
+		goto error_return;
+	}
+
+	if (bmih->biClrUsed > (UINT32_MAX / sizeof(RGBQUAD)))
+		goto error_return;
+	palette_size = bmih->biClrUsed * sizeof(RGBQUAD);
+	if (header_size > SIZE_MAX - mask_size ||
+	    header_size + mask_size > SIZE_MAX - palette_size)
+		goto error_return;
+	bits_offset = header_size + mask_size + palette_size;
+	if (bits_offset > source->data_contents.size)
+		goto error_return;
+
+	stride = DIB_WIDTH_BYTES((uint64_t)width * bpp);
+	if (height && stride > UINT64_MAX / height)
+		goto error_return;
+	image_size = stride * height;
+	if (image_size > SIZE_MAX ||
+	    bits_offset > SIZE_MAX - (size_t)image_size ||
+	    bits_offset + (size_t)image_size > source->data_contents.size)
+		goto error_return;
+
+	if (width > SIZE_MAX / 3)
+		goto error_return;
+	row_size = (size_t)width * 3;
+	row = malloc(row_size);
+	if (!row)
+		goto error_return;
+
+	png = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+	if (!png)
+		goto error_return;
+	info = png_create_info_struct(png);
+	if (!info)
+		goto error_return;
+
+	if (setjmp(png_jmpbuf(png)))
+		goto error_return;
+
+	png_set_write_fn(png, &data_contents, clipboard_png_write_data,
+			 clipboard_png_flush_data);
+	png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB,
+		     PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+		     PNG_FILTER_TYPE_DEFAULT);
+	png_write_info(png, info);
+
+	bits = src + bits_offset;
+	for (uint32_t y = 0; y < height; y++) {
+		uint32_t src_y = top_down ? y : (height - y - 1);
+		uint8_t *src_row = bits + (stride * src_y);
+
+		for (uint32_t x = 0; x < width; x++) {
+			uint32_t pixel;
+
+			if (bpp == 24) {
+				uint8_t *p = src_row + ((size_t)x * 3);
+
+				pixel = ((uint32_t)p[0]) |
+					((uint32_t)p[1] << 8) |
+					((uint32_t)p[2] << 16);
+			} else {
+				uint8_t *p = src_row + ((size_t)x * 4);
+
+				pixel = ((uint32_t)p[0]) |
+					((uint32_t)p[1] << 8) |
+					((uint32_t)p[2] << 16) |
+					((uint32_t)p[3] << 24);
+			}
+
+			row[((size_t)x * 3) + 0] = clipboard_masked_channel_to_byte(pixel, red_mask);
+			row[((size_t)x * 3) + 1] = clipboard_masked_channel_to_byte(pixel, green_mask);
+			row[((size_t)x * 3) + 2] = clipboard_masked_channel_to_byte(pixel, blue_mask);
+		}
+
+		png_write_row(png, row);
+	}
+
+	png_write_end(png, info);
+	if (data_contents.size > UINT32_MAX)
+		goto error_return;
+
+	png_destroy_write_struct(&png, &info);
+	free(row);
+	row = NULL;
+
+	wl_array_release(&source->data_contents);
+	source->data_contents = data_contents;
+	source->is_data_processed = true;
+	source->processed_data_start = source->data_contents.data;
+	source->processed_data_size = source->data_contents.size;
+	source->processed_data_is_send = is_send;
+
+	rdp_debug_clipboard_verbose(b, "RDP %s (%p:%s): receive (%d bytes)\n",
+				    __func__, source,
+				    clipboard_data_source_state_to_string(source),
+				    (uint32_t)source->data_contents.size);
+
+	return true;
+
+error_return:
+	if (png)
+		png_destroy_write_struct(&png, info ? &info : NULL);
+	free(row);
+	wl_array_release(&data_contents);
+	source->state = RDP_CLIPBOARD_SOURCE_FAILED;
+	weston_log("RDP %s FAILED (%p:%s): %s (%d bytes)\n",
+		   __func__, source, clipboard_data_source_state_to_string(source),
+		   is_send ? "send" : "receive", (uint32_t)source->data_contents.size);
+
+	return false;
+}
+
 static char *
 clipboard_format_id_to_string(UINT32 formatId, bool is_server_format_id)
 {
@@ -659,36 +921,33 @@ clipboard_format_id_to_string(UINT32 formatId, bool is_server_format_id)
 	return "Unknown format";
 }
 
-/* find supported index in supported format table by format id from client */
-static int
-clipboard_find_supported_format_by_format_id(UINT32 format_id)
+static bool
+clipboard_supported_format_matches_format_id_and_name(
+	const struct rdp_clipboard_supported_format *format,
+	UINT32 format_id, const char *format_name, uint32_t direction_flags)
 {
-	unsigned int i;
+	if ((format->direction_flags & direction_flags) == 0)
+		return false;
 
-	for (i = 0; i < RDP_NUM_CLIPBOARD_FORMATS; i++) {
-		struct rdp_clipboard_supported_format *format = &clipboard_supported_formats[i];
-
-		if (format_id == format->format_id)
-			return i;
-	}
-	return -1;
+	/* when our supported format table has format name, only format name must match,
+	   format id provided from client is ignored (but it may be saved by caller for future use.
+	   When our supported format table doesn't have format name, only format id must match,
+	   format name (if provided from client) is ignored */
+	return (format->format_name == NULL && format_id == format->format_id) ||
+	       (format->format_name && format_name && strcmp(format_name, format->format_name) == 0);
 }
 
-/* find supported index in supported format table by format id and name from client */
+/* find supported index in supported format table by format id from client */
 static int
-clipboard_find_supported_format_by_format_id_and_name(UINT32 format_id, const char *format_name)
+clipboard_find_supported_format_by_format_id(UINT32 format_id, uint32_t direction_flags)
 {
 	unsigned int i;
 
 	for (i = 0; i < RDP_NUM_CLIPBOARD_FORMATS; i++) {
 		struct rdp_clipboard_supported_format *format = &clipboard_supported_formats[i];
 
-		/* when our supported format table has format name, only format name must match,
-		   format id provided from client is ignored (but it may be saved by caller for future use.
-		   When our supported format table doesn't have format name, only format id must match,
-		   format name (if provided from client) is ignored */
-		if ((format->format_name == NULL && format_id == format->format_id) ||
-		    (format->format_name && format_name && strcmp(format_name, format->format_name) == 0))
+		if ((format->direction_flags & direction_flags) &&
+		    format_id == format->format_id)
 			return i;
 	}
 	return -1;
@@ -696,14 +955,15 @@ clipboard_find_supported_format_by_format_id_and_name(UINT32 format_id, const ch
 
 /* find supported index in supported format table by mime */
 static int
-clipboard_find_supported_format_by_mime_type(const char *mime_type)
+clipboard_find_supported_format_by_mime_type(const char *mime_type, uint32_t direction_flags)
 {
 	unsigned int i;
 
 	for (i = 0; i < RDP_NUM_CLIPBOARD_FORMATS; i++) {
 		struct rdp_clipboard_supported_format *format = &clipboard_supported_formats[i];
 
-		if (strcmp(mime_type, format->mime_type) == 0)
+		if ((format->direction_flags & direction_flags) &&
+		    strcmp(mime_type, format->mime_type) == 0)
 			return i;
 	}
 	return -1;
@@ -964,7 +1224,11 @@ clipboard_data_source_write(int fd, uint32_t mask, void *arg)
 
 	assert_compositor_thread(b);
 
-	assert(source->data_source_fd == fd);
+	/* 避免 WSLg 闪退：禁止断言失败退出 */
+	/* assert(source->data_source_fd == fd); */
+	if (source->data_source_fd != fd) {
+		goto fail;
+	}
 	/* this data source must be tracked as inflight */
 	assert(source == ctx->clipboard_inflight_client_data_source);
 
@@ -1000,7 +1264,20 @@ clipboard_data_source_write(int fd, uint32_t mask, void *arg)
 		clipboard_process_source(source, false);
 		data_to_write = source->processed_data_start;
 		data_size = source->processed_data_size;
+		/* 方案 A: 增大 pipe 缓冲区以减少大数据传输时的 EAGAIN 频率，
+		   避免 compositor 主线程频繁被唤醒又写不出去 */
+		if (data_size > 0) {
+			int desired_pipe_size = (int)data_size;
+			if (desired_pipe_size < RDP_CLIPBOARD_PIPE_BUF_MIN_SIZE)
+				desired_pipe_size = RDP_CLIPBOARD_PIPE_BUF_MIN_SIZE;
+			fcntl(source->data_source_fd, F_SETPIPE_SZ, desired_pipe_size);
+			rdp_debug_clipboard_verbose(b, "RDP %s (%p:%s) set pipe buffer to %d bytes for %zu bytes data\n",
+						    __func__, source,
+						    clipboard_data_source_state_to_string(source),
+						    desired_pipe_size, data_size);
+		}
 	}
+	size_t bytes_written_this_callback = 0; /* 方案 B: 跟踪本次回调已写入字节数 */
 	while (data_to_write && data_size) {
 		source->state = RDP_CLIPBOARD_SOURCE_TRANSFERING;
 		do {
@@ -1025,6 +1302,7 @@ clipboard_data_source_write(int fd, uint32_t mask, void *arg)
 			assert(data_size >= (size_t)size);
 			data_size -= size;
 			data_to_write = (char *)data_to_write + size;
+			bytes_written_this_callback += size;
 			rdp_debug_clipboard_verbose(b, "RDP %s (%p:%s) wrote %ld bytes, remaining %ld bytes\n",
 						    __func__, source,
 						    clipboard_data_source_state_to_string(source),
@@ -1035,6 +1313,19 @@ clipboard_data_source_write(int fd, uint32_t mask, void *arg)
 						    __func__, source,
 						    clipboard_data_source_state_to_string(source),
 						    source->data_contents.size);
+			}
+			/* 方案 B: 限制单次事件循环回调的写入量，让出 compositor 主线程
+			   处理渲染和输入事件，避免大数据传输时窗口卡死 */
+			if (data_size > 0 &&
+			    bytes_written_this_callback >= RDP_CLIPBOARD_MAX_WRITE_PER_CALLBACK) {
+				rdp_debug_clipboard_verbose(b, "RDP %s (%p:%s) yield after %zu bytes, remaining %zu bytes\n",
+							    __func__, source,
+							    clipboard_data_source_state_to_string(source),
+							    bytes_written_this_callback, data_size);
+				source->inflight_data_to_write = data_to_write;
+				source->inflight_data_size = data_size;
+				source->inflight_write_count++;
+				return 0;
 			}
 		}
 	}
@@ -1125,7 +1416,8 @@ clipboard_data_source_send(struct weston_data_source *base,
 		goto error_return_close_fd;
 	}
 
-	index = clipboard_find_supported_format_by_mime_type(mime_type);
+	index = clipboard_find_supported_format_by_mime_type(mime_type,
+							    RDP_CLIPBOARD_FORMAT_FROM_CLIENT);
 	if (index >= 0 &&			/* check supported by this RDP bridge */
 	    source->client_format_id_table[index]) {	/* check supported by current data source from client */
 		ctx->clipboard_inflight_client_data_source = source;
@@ -1178,10 +1470,12 @@ clipboard_data_source_send(struct weston_data_source *base,
 				goto error_return_unref_source;
 		}
 	} else {
+		uint32_t format_id = index >= 0 ? source->client_format_id_table[index] : 0;
+
 		source->state = RDP_CLIPBOARD_SOURCE_FAILED;
 		weston_log("RDP %s (%p:%s) specified format \"%s\" index:%d formatId:%d is not supported by client\n",
 			   __func__, source, clipboard_data_source_state_to_string(source),
-			   mime_type, index, source->client_format_id_table[index]);
+			   mime_type, index, format_id);
 		goto error_return_close_fd;
 	}
 
@@ -1437,7 +1731,8 @@ clipboard_set_selection(struct wl_listener *listener, void *data)
 
 	/* check supported clipboard formats */
 	wl_array_for_each(mime_type, &selection_data_source->mime_types) {
-		index = clipboard_find_supported_format_by_mime_type(*mime_type);
+		index = clipboard_find_supported_format_by_mime_type(*mime_type,
+								    RDP_CLIPBOARD_FORMAT_TO_CLIENT);
 		if (index >= 0) {
 			CLIPRDR_FORMAT *f = &format[num_supported_format];
 
@@ -1556,30 +1851,48 @@ clipboard_client_format_list(CliprdrServerContext *context, const CLIPRDR_FORMAT
 
 	for (uint32_t i = 0; i < formatList->numFormats; i++) {
 		CLIPRDR_FORMAT *format = &formatList->formats[i];
-		int index = clipboard_find_supported_format_by_format_id_and_name(format->formatId, format->formatName);
+		for (uint32_t index = 0; index < RDP_NUM_CLIPBOARD_FORMATS; index++) {
+			const struct rdp_clipboard_supported_format *supported_format =
+				&clipboard_supported_formats[index];
+			bool mime_type_exists = false;
 
-		if (index >= 0) {
+			if (!clipboard_supported_format_matches_format_id_and_name(
+				    supported_format, format->formatId, format->formatName,
+				    RDP_CLIPBOARD_FORMAT_FROM_CLIENT))
+				continue;
+
 			/* save format id given from client, client can handle its own format id for private format. */
 			source->client_format_id_table[index] = format->formatId;
-			s = strdup(clipboard_supported_formats[index].mime_type);
-			if (s) {
-				p = wl_array_add(&source->base.mime_types, sizeof *p);
-				if (p) {
-					rdp_debug_clipboard(b, "Client: %s (%p:%s) mine_type:\"%s\" index:%d formatId:%d\n",
-							    __func__, source,
-							    clipboard_data_source_state_to_string(source),
-							    s, index, format->formatId);
-					*p = s;
-				} else {
-					rdp_debug_clipboard(b, "Client: %s (%p:%s) wl_array_add failed\n",
-							    __func__, source,
-							    clipboard_data_source_state_to_string(source));
-					free(s);
+
+			wl_array_for_each(p, &source->base.mime_types) {
+				if (strcmp(*p, supported_format->mime_type) == 0) {
+					mime_type_exists = true;
+					break;
 				}
-			} else {
+			}
+			if (mime_type_exists)
+				continue;
+
+			s = strdup(supported_format->mime_type);
+			if (!s) {
 				rdp_debug_clipboard(b, "Client: %s (%p:%s) strdup failed\n",
 						    __func__, source,
 						    clipboard_data_source_state_to_string(source));
+				continue;
+			}
+
+			p = wl_array_add(&source->base.mime_types, sizeof *p);
+			if (p) {
+				rdp_debug_clipboard(b, "Client: %s (%p:%s) mine_type:\"%s\" index:%d formatId:%d\n",
+						    __func__, source,
+						    clipboard_data_source_state_to_string(source),
+						    s, index, format->formatId);
+				*p = s;
+			} else {
+				rdp_debug_clipboard(b, "Client: %s (%p:%s) wl_array_add failed\n",
+						    __func__, source,
+						    clipboard_data_source_state_to_string(source));
+				free(s);
 			}
 		}
 	}
@@ -1716,7 +2029,8 @@ clipboard_client_format_data_request(CliprdrServerContext *context,
 	assert_not_compositor_thread(b);
 
 	/* Make sure clients requested the format we knew */
-	index = clipboard_find_supported_format_by_format_id(formatDataRequest->requestedFormatId);
+	index = clipboard_find_supported_format_by_format_id(formatDataRequest->requestedFormatId,
+							    RDP_CLIPBOARD_FORMAT_TO_CLIENT);
 	if (index < 0) {
 		weston_log("Client: %s client requests data format the server never reported in format list response. protocol error.\n", __func__);
 		goto error_return;

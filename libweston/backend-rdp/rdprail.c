@@ -46,6 +46,7 @@
 
 #include "libweston-internal.h"
 #include "shared/xalloc.h"
+#include <libweston/xwayland-api.h>
 
 #define RAIL_WINDOW_FULLSCREEN_STYLE (WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_GROUP | WS_TABSTOP)
 #define RAIL_WINDOW_NORMAL_STYLE (RAIL_WINDOW_FULLSCREEN_STYLE | WS_THICKFRAME | WS_CAPTION)
@@ -58,6 +59,30 @@ extern PWtsApiFunctionTable FreeRDP_InitWtsApi(void);
 static void rdp_rail_destroy_window(struct wl_listener *listener, void *data);
 static void rdp_rail_schedule_update_window(struct wl_listener *listener, void *data);
 static void rdp_rail_dump_window_label(struct weston_surface *surface, char *label, uint32_t label_size);
+
+static bool
+rdp_rail_surface_is_xwayland(struct weston_surface *surface)
+{
+	const struct weston_xwayland_surface_api *api;
+
+	if (!surface)
+		return false;
+
+	api = weston_xwayland_surface_get_api(surface->compositor);
+	if (!api || !api->is_xwayland_surface)
+		return false;
+
+	return api->is_xwayland_surface(surface);
+}
+
+static UINT32
+rdp_rail_window_style_for_surface(struct weston_surface *surface)
+{
+	if (rdp_rail_surface_is_xwayland(surface))
+		return RAIL_WINDOW_FULLSCREEN_STYLE;
+
+	return RAIL_WINDOW_NORMAL_STYLE;
+}
 
 struct lang_GUID {
 	uint32_t Data1;
@@ -1657,7 +1682,7 @@ rdp_rail_create_window(struct wl_listener *listener, void *data)
 	window_order_info.windowId = window_id;
 
 	window_order_info.fieldFlags |= WINDOW_ORDER_FIELD_STYLE;
-	window_state_order.style = RAIL_WINDOW_NORMAL_STYLE;
+	window_state_order.style = rdp_rail_window_style_for_surface(surface);
 	window_state_order.extendedStyle = WS_EX_LAYERED;
 
 	window_order_info.fieldFlags |= WINDOW_ORDER_FIELD_OWNER;
@@ -2230,10 +2255,11 @@ rdp_rail_update_window(struct weston_surface *surface,
 					  window_id,
 					  rdp_showstate_to_string(rail_state->showState),
 					  rdp_showstate_to_string(rail_state->showState_requested));
-			/* if exiting fullscreen, restore window style to normal style */
+			/* if exiting fullscreen, restore window style */
 			if (rail_state->showState == RDP_WINDOW_SHOW_FULLSCREEN) {
 				window_order_info.fieldFlags |= WINDOW_ORDER_FIELD_STYLE;
-				window_state_order.style = RAIL_WINDOW_NORMAL_STYLE;
+				window_state_order.style =
+					rdp_rail_window_style_for_surface(surface);
 				window_state_order.extendedStyle = WS_EX_LAYERED;
 				/* force update window geometry */
 				rail_state->forceUpdateWindowState = true;
@@ -2929,7 +2955,7 @@ rdp_rail_update_window(struct weston_surface *surface,
 			pixman_region32_clear(&rail_state->damage);
 
 			/* TODO: this is a temporary workaround, some windows are not visible to shell
-			   (such as subsurfaces, override_redirect), so z order update is 
+			   (such as subsurfaces, override_redirect), so z order update is
 			   not done by activate callback, thus trigger it at first update.
 			   solution would make those surface visible to shell or hook signal on
 			   when view_list is changed on libweston/compositor.c */

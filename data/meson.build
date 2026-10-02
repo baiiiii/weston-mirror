@@ -27,3 +27,19 @@ install_data(
 	],
 	install_dir: join_paths(dir_data, 'weston')
 )
+
+install_data(
+	[
+		'custom_icon/close_black.png',
+		'custom_icon/close_white.png',
+		'custom_icon/maximize_black.png',
+		'custom_icon/maximize_white.png',
+		'custom_icon/minimize_black.png',
+		'custom_icon/minimize_white.png',
+		'custom_icon/revert_black.png',
+		'custom_icon/revert_white.png',
+		'custom_icon/window_black.png',
+		'custom_icon/window_white.png',
+	],
+	install_dir: join_paths(dir_data, 'weston', 'custom_icon')
+)

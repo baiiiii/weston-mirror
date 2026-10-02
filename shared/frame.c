@@ -40,6 +40,15 @@ enum frame_button_flags {
 	FRAME_BUTTON_ALIGN_RIGHT = 0x1,
 	FRAME_BUTTON_DECORATED = 0x2,
 	FRAME_BUTTON_CLICK_DOWN = 0x4,
+	FRAME_BUTTON_PADDED = 0x8,
+};
+
+enum frame_button_type {
+	FRAME_BUTTON_TYPE_CUSTOM,
+	FRAME_BUTTON_TYPE_WINDOW,
+	FRAME_BUTTON_TYPE_CLOSE,
+	FRAME_BUTTON_TYPE_MAXIMIZE,
+	FRAME_BUTTON_TYPE_MINIMIZE,
 };
 
 struct frame_button {
@@ -48,6 +57,7 @@ struct frame_button {
 
 	cairo_surface_t *icon;
 	enum frame_button_flags flags;
+	enum frame_button_type type;
 	int hover_count;
 	int press_count;
 
@@ -111,7 +121,8 @@ struct frame {
 static struct frame_button *
 frame_button_create_from_surface(struct frame *frame, cairo_surface_t *icon,
                                  enum frame_status status_effect,
-                                 enum frame_button_flags flags)
+                                 enum frame_button_flags flags,
+                                 enum frame_button_type type)
 {
 	struct frame_button *button;
 
@@ -122,6 +133,7 @@ frame_button_create_from_surface(struct frame *frame, cairo_surface_t *icon,
 	button->icon = icon;
 	button->frame = frame;
 	button->flags = flags;
+	button->type = type;
 	button->status_effect = status_effect;
 
 	wl_list_insert(frame->buttons.prev, &button->link);
@@ -132,7 +144,8 @@ frame_button_create_from_surface(struct frame *frame, cairo_surface_t *icon,
 static struct frame_button *
 frame_button_create(struct frame *frame, const char *icon_name,
                     enum frame_status status_effect,
-                    enum frame_button_flags flags)
+                    enum frame_button_flags flags,
+                    enum frame_button_type type)
 {
 	struct frame_button *button;
 	cairo_surface_t *icon;
@@ -142,7 +155,7 @@ frame_button_create(struct frame *frame, const char *icon_name,
 		goto error;
 
 	button = frame_button_create_from_surface(frame, icon, status_effect,
-	                                          flags);
+	                                          flags, type);
 	if (!button)
 		goto error;
 
@@ -151,6 +164,78 @@ frame_button_create(struct frame *frame, const char *icon_name,
 error:
 	cairo_surface_destroy(icon);
 	return NULL;
+}
+
+static const char *
+frame_button_icon_basename(struct frame_button *button)
+{
+	bool dark = button->frame->flags & FRAME_FLAG_DARK;
+	bool maximized = button->frame->flags & FRAME_FLAG_MAXIMIZED;
+
+	switch (button->type) {
+	case FRAME_BUTTON_TYPE_WINDOW:
+		return dark ? "custom_icon/window_white.png" :
+			      "custom_icon/window_black.png";
+	case FRAME_BUTTON_TYPE_CLOSE:
+		return dark ? "custom_icon/close_white.png" :
+			      "custom_icon/close_black.png";
+	case FRAME_BUTTON_TYPE_MAXIMIZE:
+		if (maximized)
+			return dark ? "custom_icon/revert_white.png" :
+				      "custom_icon/revert_black.png";
+
+		return dark ? "custom_icon/maximize_white.png" :
+			      "custom_icon/maximize_black.png";
+	case FRAME_BUTTON_TYPE_MINIMIZE:
+		return dark ? "custom_icon/minimize_white.png" :
+			      "custom_icon/minimize_black.png";
+	case FRAME_BUTTON_TYPE_CUSTOM:
+	default:
+		return NULL;
+	}
+}
+
+static int
+frame_button_update_icon(struct frame_button *button)
+{
+	cairo_surface_t *icon;
+	char *name;
+	const char *basename;
+
+	basename = frame_button_icon_basename(button);
+	if (!basename)
+		return 0;
+
+	name = file_name_with_datadir(basename);
+	if (!name)
+		return -1;
+
+	icon = cairo_image_surface_create_from_png(name);
+	free(name);
+
+	if (cairo_surface_status(icon) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(icon);
+		return -1;
+	}
+
+	if (button->icon)
+		cairo_surface_destroy(button->icon);
+	button->icon = icon;
+
+	return 0;
+}
+
+static void
+frame_update_button_icons(struct frame *frame)
+{
+	struct frame_button *button;
+
+	wl_list_for_each(button, &frame->buttons, link) {
+		if (frame_button_update_icon(button) == 0)
+			frame->geometry_dirty = 1;
+	}
+
+	frame->status |= FRAME_STATUS_REPAINT;
 }
 
 static void
@@ -183,8 +268,13 @@ frame_button_press(struct frame_button *button)
 		button->frame->status |= FRAME_STATUS_REPAINT;
 	button->press_count++;
 
-	if (button->flags & FRAME_BUTTON_CLICK_DOWN)
-		button->frame->status |= button->status_effect;
+	if (button->flags & FRAME_BUTTON_CLICK_DOWN) {
+		if (button->status_effect == FRAME_STATUS_MENU &&
+		    (button->frame->flags & FRAME_FLAG_MENU_TOGGLES_THEME))
+			button->frame->status |= FRAME_STATUS_THEME;
+		else
+			button->frame->status |= button->status_effect;
+	}
 }
 
 static void
@@ -196,8 +286,13 @@ frame_button_release(struct frame_button *button)
 
 	button->frame->status |= FRAME_STATUS_REPAINT;
 
-	if (!(button->flags & FRAME_BUTTON_CLICK_DOWN))
-		button->frame->status |= button->status_effect;
+	if (!(button->flags & FRAME_BUTTON_CLICK_DOWN)) {
+		if (button->status_effect == FRAME_STATUS_MENU &&
+		    (button->frame->flags & FRAME_FLAG_MENU_TOGGLES_THEME))
+			button->frame->status |= FRAME_STATUS_THEME;
+		else
+			button->frame->status |= button->status_effect;
+	}
 }
 
 static void
@@ -242,6 +337,8 @@ frame_button_repaint(struct frame_button *button, cairo_t *cr)
 		cairo_fill (cr);
 
 		x += 4;
+	} else if (button->flags & FRAME_BUTTON_PADDED) {
+		x += 5;
 	}
 
 	cairo_set_source_surface(cr, button->icon, x, y);
@@ -356,9 +453,10 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 			button = frame_button_create_from_surface(frame,
 			                                          icon,
 			                                          FRAME_STATUS_MENU,
-			                                          FRAME_BUTTON_CLICK_DOWN);
+			                                          FRAME_BUTTON_CLICK_DOWN,
+			                                          FRAME_BUTTON_TYPE_CUSTOM);
 		} else {
-			char *name = file_name_with_datadir("icon_window.png");
+			char *name = file_name_with_datadir("custom_icon/window_black.png");
 
 			if (!name)
 				goto free_frame;
@@ -366,7 +464,8 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 			button = frame_button_create(frame,
 			                             name,
 			                             FRAME_STATUS_MENU,
-			                             FRAME_BUTTON_CLICK_DOWN);
+			                             FRAME_BUTTON_CLICK_DOWN,
+			                             FRAME_BUTTON_TYPE_WINDOW);
 			free(name);
 		}
 		if (!button)
@@ -374,7 +473,7 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 	}
 
 	if (buttons & FRAME_BUTTON_CLOSE) {
-		char *name = file_name_with_datadir("sign_close.png");
+		char *name = file_name_with_datadir("custom_icon/close_black.png");
 
 		if (!name)
 			goto free_frame;
@@ -383,14 +482,15 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 					     name,
 					     FRAME_STATUS_CLOSE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
-					     FRAME_BUTTON_DECORATED);
+					     FRAME_BUTTON_PADDED,
+					     FRAME_BUTTON_TYPE_CLOSE);
 		free(name);
 		if (!button)
 			goto free_frame;
 	}
 
 	if (buttons & FRAME_BUTTON_MAXIMIZE) {
-		char *name = file_name_with_datadir("sign_maximize.png");
+		char *name = file_name_with_datadir("custom_icon/maximize_black.png");
 
 		if (!name)
 			goto free_frame;
@@ -399,14 +499,15 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 					     name,
 					     FRAME_STATUS_MAXIMIZE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
-					     FRAME_BUTTON_DECORATED);
+					     FRAME_BUTTON_PADDED,
+					     FRAME_BUTTON_TYPE_MAXIMIZE);
 		free(name);
 		if (!button)
 			goto free_frame;
 	}
 
 	if (buttons & FRAME_BUTTON_MINIMIZE) {
-		char *name = file_name_with_datadir("sign_minimize.png");
+		char *name = file_name_with_datadir("custom_icon/minimize_black.png");
 
 		if (!name)
 			goto free_frame;
@@ -415,7 +516,8 @@ frame_create(struct theme *t, int32_t width, int32_t height, uint32_t buttons,
 					     name,
 					     FRAME_STATUS_MINIMIZE,
 					     FRAME_BUTTON_ALIGN_RIGHT |
-					     FRAME_BUTTON_DECORATED);
+					     FRAME_BUTTON_PADDED,
+					     FRAME_BUTTON_TYPE_MINIMIZE);
 		free(name);
 		if (!button)
 			goto free_frame;
@@ -465,21 +567,45 @@ frame_set_icon(struct frame *frame, cairo_surface_t *icon)
 void
 frame_set_flag(struct frame *frame, enum frame_flag flag)
 {
-	if (flag & FRAME_FLAG_MAXIMIZED && !(frame->flags & FRAME_FLAG_MAXIMIZED))
+	uint32_t old_flags = frame->flags;
+
+	if ((flag & (FRAME_FLAG_MAXIMIZED |
+		     FRAME_FLAG_BORDERLESS |
+		     FRAME_FLAG_TITLEBAR_ONLY)) &&
+	    (old_flags & flag) != flag)
 		frame->geometry_dirty = 1;
 
 	frame->flags |= flag;
+	if ((old_flags ^ frame->flags) & (FRAME_FLAG_DARK |
+					  FRAME_FLAG_MAXIMIZED))
+		frame_update_button_icons(frame);
+
 	frame->status |= FRAME_STATUS_REPAINT;
 }
 
 void
 frame_unset_flag(struct frame *frame, enum frame_flag flag)
 {
-	if (flag & FRAME_FLAG_MAXIMIZED && frame->flags & FRAME_FLAG_MAXIMIZED)
+	uint32_t old_flags = frame->flags;
+
+	if ((flag & (FRAME_FLAG_MAXIMIZED |
+		     FRAME_FLAG_BORDERLESS |
+		     FRAME_FLAG_TITLEBAR_ONLY)) &&
+	    (old_flags & flag))
 		frame->geometry_dirty = 1;
 
 	frame->flags &= ~flag;
+	if ((old_flags ^ frame->flags) & (FRAME_FLAG_DARK |
+					  FRAME_FLAG_MAXIMIZED))
+		frame_update_button_icons(frame);
+
 	frame->status |= FRAME_STATUS_REPAINT;
+}
+
+bool
+frame_get_flag(struct frame *frame, enum frame_flag flag)
+{
+	return (frame->flags & flag) == flag;
 }
 
 void
@@ -497,6 +623,25 @@ frame_decoration_sizes(struct frame *frame, int32_t *top, int32_t *bottom,
 		       int32_t *left, int32_t *right)
 {
 	struct theme *t = frame->theme;
+
+	if (frame->flags & FRAME_FLAG_BORDERLESS) {
+		*top = 0;
+		*bottom = 0;
+		*right = 0;
+		*left = 0;
+		return;
+	}
+
+	if (frame->flags & FRAME_FLAG_TITLEBAR_ONLY) {
+		if (frame->title || !wl_list_empty(&frame->buttons))
+			*top = t->titlebar_height;
+		else
+			*top = 0;
+		*bottom = 0;
+		*right = 0;
+		*left = 0;
+		return;
+	}
 
 	/* Top may have a titlebar */
 	if (frame->title || !wl_list_empty(&frame->buttons))
@@ -557,7 +702,36 @@ frame_refresh_geometry(struct frame *frame)
 	else
 		titlebar_height = t->width;
 
-	if (frame->flags & FRAME_FLAG_MAXIMIZED) {
+	if (frame->flags & FRAME_FLAG_BORDERLESS) {
+		frame->interior.x = 0;
+		frame->interior.y = 0;
+		frame->interior.width = frame->width;
+		frame->interior.height = frame->height;
+		frame->opaque_margin = 0;
+		frame->shadow_margin = 0;
+
+		wl_list_for_each(button, &frame->buttons, link) {
+			button->allocation.x = 0;
+			button->allocation.y = 0;
+			button->allocation.width = 0;
+			button->allocation.height = 0;
+		}
+
+		frame->title_rect.x = 0;
+		frame->title_rect.y = 0;
+		frame->title_rect.width = 0;
+		frame->title_rect.height = 0;
+		frame->geometry_dirty = 0;
+		return;
+	} else if (frame->flags & FRAME_FLAG_TITLEBAR_ONLY) {
+		frame->interior.x = 0;
+		frame->interior.y = titlebar_height;
+		frame->interior.width = frame->width;
+		frame->interior.height = frame->height > titlebar_height ?
+			frame->height - titlebar_height : 0;
+		frame->opaque_margin = 0;
+		frame->shadow_margin = 0;
+	} else if (frame->flags & FRAME_FLAG_MAXIMIZED) {
 		decoration_width = t->width * 2;
 		decoration_height = t->width + titlebar_height;
 
@@ -581,29 +755,42 @@ frame_refresh_geometry(struct frame *frame)
 		frame->shadow_margin = t->margin;
 	}
 
-	x_r = frame->width - t->width - frame->shadow_margin;
-	x_l = t->width + frame->shadow_margin;
-	y = t->width + frame->shadow_margin;
+	if (frame->flags & FRAME_FLAG_TITLEBAR_ONLY) {
+		x_r = frame->width;
+		x_l = 4;
+		y = 0;
+	} else {
+		x_r = frame->width - t->width - frame->shadow_margin;
+		x_l = t->width + frame->shadow_margin;
+		y = t->width + frame->shadow_margin;
+	}
 	wl_list_for_each(button, &frame->buttons, link) {
 		const int button_padding = 4;
+		int icon_y;
+
 		w = cairo_image_surface_get_width(button->icon);
 		h = cairo_image_surface_get_height(button->icon);
 
-		if (button->flags & FRAME_BUTTON_DECORATED)
+		if (button->flags & (FRAME_BUTTON_DECORATED | FRAME_BUTTON_PADDED))
 			w += 10;
+
+		if (frame->flags & FRAME_FLAG_TITLEBAR_ONLY)
+			icon_y = (titlebar_height - h) / 2;
+		else
+			icon_y = y;
 
 		if (button->flags & FRAME_BUTTON_ALIGN_RIGHT) {
 			x_r -= w;
 
 			button->allocation.x = x_r;
-			button->allocation.y = y;
+			button->allocation.y = icon_y;
 			button->allocation.width = w + 1;
 			button->allocation.height = h + 1;
 
 			x_r -= button_padding;
 		} else {
 			button->allocation.x = x_l;
-			button->allocation.y = y;
+			button->allocation.y = icon_y;
 			button->allocation.width = w + 1;
 			button->allocation.height = h + 1;
 
@@ -676,6 +863,25 @@ frame_get_shadow_margin(struct frame *frame)
 	return frame->shadow_margin;
 }
 
+static uint32_t
+frame_get_theme_flags(struct frame *frame)
+{
+	uint32_t flags = 0;
+
+	if (frame->flags & FRAME_FLAG_MAXIMIZED)
+		flags |= THEME_FRAME_MAXIMIZED;
+	if (frame->flags & FRAME_FLAG_ACTIVE)
+		flags |= THEME_FRAME_ACTIVE;
+	if (frame->flags & FRAME_FLAG_BORDERLESS)
+		flags |= THEME_FRAME_BORDERLESS;
+	if (frame->flags & FRAME_FLAG_TITLEBAR_ONLY)
+		flags |= THEME_FRAME_TITLEBAR_ONLY;
+	if (frame->flags & FRAME_FLAG_DARK)
+		flags |= THEME_FRAME_DARK;
+
+	return flags;
+}
+
 uint32_t
 frame_status(struct frame *frame)
 {
@@ -721,8 +927,7 @@ frame_pointer_motion(struct frame *frame, void *data, int x, int y)
 
 	location = theme_get_location(frame->theme, x, y,
 				      frame->width, frame->height,
-				      frame->flags & FRAME_FLAG_MAXIMIZED ?
-				      THEME_FRAME_MAXIMIZED : 0);
+				      frame_get_theme_flags(frame));
 	if (!pointer)
 		return location;
 
@@ -841,8 +1046,7 @@ frame_pointer_button(struct frame *frame, void *data,
 
 	location = theme_get_location(frame->theme, pointer->x, pointer->y,
 				      frame->width, frame->height,
-				      frame->flags & FRAME_FLAG_MAXIMIZED ?
-				      THEME_FRAME_MAXIMIZED : 0);
+				      frame_get_theme_flags(frame));
 
 	if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
 		button = malloc(sizeof *button);
@@ -881,8 +1085,7 @@ frame_touch_down(struct frame *frame, void *data, int32_t id, int x, int y)
 
 	location = theme_get_location(frame->theme, x, y,
 				      frame->width, frame->height,
-				      frame->flags & FRAME_FLAG_MAXIMIZED ?
-				      THEME_FRAME_MAXIMIZED : 0);
+				      frame_get_theme_flags(frame));
 
 	if (id > 0)
 		return location;
@@ -937,8 +1140,7 @@ frame_double_click(struct frame *frame, void *data,
 
 	location = theme_get_location(frame->theme, pointer->x, pointer->y,
 				      frame->width, frame->height,
-				      frame->flags & FRAME_FLAG_MAXIMIZED ?
-				      THEME_FRAME_MAXIMIZED : 0);
+				      frame_get_theme_flags(frame));
 
 	button = frame_find_button(frame, pointer->x, pointer->y);
 
@@ -974,8 +1176,7 @@ frame_double_touch_down(struct frame *frame, void *data, int32_t id,
 
 	location = theme_get_location(frame->theme, x, y,
 				      frame->width, frame->height,
-				      frame->flags & FRAME_FLAG_MAXIMIZED ?
-				      THEME_FRAME_MAXIMIZED : 0);
+				      frame_get_theme_flags(frame));
 
 	switch (location) {
 	case THEME_LOCATION_TITLEBAR:
@@ -1011,15 +1212,10 @@ void
 frame_repaint(struct frame *frame, cairo_t *cr)
 {
 	struct frame_button *button;
-	uint32_t flags = 0;
+	uint32_t flags;
 
 	frame_refresh_geometry(frame);
-
-	if (frame->flags & FRAME_FLAG_MAXIMIZED)
-		flags |= THEME_FRAME_MAXIMIZED;
-
-	if (frame->flags & FRAME_FLAG_ACTIVE)
-		flags |= THEME_FRAME_ACTIVE;
+	flags = frame_get_theme_flags(frame);
 
 	cairo_save(cr);
 	theme_render_frame(frame->theme, cr, frame->width, frame->height,
@@ -1027,8 +1223,10 @@ frame_repaint(struct frame *frame, cairo_t *cr)
 			   &frame->buttons, flags);
 	cairo_restore(cr);
 
-	wl_list_for_each(button, &frame->buttons, link)
-		frame_button_repaint(button, cr);
+	if (!(frame->flags & FRAME_FLAG_BORDERLESS)) {
+		wl_list_for_each(button, &frame->buttons, link)
+			frame_button_repaint(button, cr);
+	}
 
 	frame_status_clear(frame, FRAME_STATUS_REPAINT);
 }

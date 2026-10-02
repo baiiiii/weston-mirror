@@ -27,6 +27,7 @@
 #define _CAIRO_UTIL_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <cairo.h>
 
 #include <wayland-client.h>
@@ -67,7 +68,10 @@ theme_destroy(struct theme *t);
 enum {
 	THEME_FRAME_ACTIVE = 1,
 	THEME_FRAME_MAXIMIZED = 2,
-	THEME_FRAME_NO_TITLE = 4
+	THEME_FRAME_NO_TITLE = 4,
+	THEME_FRAME_BORDERLESS = 8,
+	THEME_FRAME_TITLEBAR_ONLY = 16,
+	THEME_FRAME_DARK = 32
 };
 
 void
@@ -108,12 +112,17 @@ enum frame_status {
 	FRAME_STATUS_MENU = 0x10,
 	FRAME_STATUS_RESIZE = 0x20,
 	FRAME_STATUS_MOVE = 0x40,
-	FRAME_STATUS_ALL = 0x7f
+	FRAME_STATUS_THEME = 0x80,
+	FRAME_STATUS_ALL = 0xff
 };
 
 enum frame_flag {
 	FRAME_FLAG_ACTIVE = 0x1,
-	FRAME_FLAG_MAXIMIZED = 0x2
+	FRAME_FLAG_MAXIMIZED = 0x2,
+	FRAME_FLAG_BORDERLESS = 0x4,
+	FRAME_FLAG_DARK = 0x8,
+	FRAME_FLAG_TITLEBAR_ONLY = 0x10,
+	FRAME_FLAG_MENU_TOGGLES_THEME = 0x20
 };
 
 enum {
@@ -146,6 +155,9 @@ frame_set_flag(struct frame *frame, enum frame_flag flag);
 /* May set FRAME_STATUS_REPAINT */
 void
 frame_unset_flag(struct frame *frame, enum frame_flag flag);
+
+bool
+frame_get_flag(struct frame *frame, enum frame_flag flag);
 
 /* May set FRAME_STATUS_REPAINT */
 void
