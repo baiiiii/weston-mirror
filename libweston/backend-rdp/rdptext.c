@@ -157,6 +157,7 @@ struct rdptext_state {
 	struct weston_surface *focused_surface;
 
 	uint32_t host_focus_ordinal;
+	uint32_t window_id;   /* RAIL window id of the focused surface */
 
 	/* IME state assembled from client PDUs */
 	bool composition_active;
@@ -449,8 +450,8 @@ rdptext_send_register_key_target(struct rdptext_state *t)
 	Stream_Write_UINT8(s, 1); /* input enabled on window by app */
 	Stream_Write_UINT8(s, 1); /* owner is a Win32 window */
 	Stream_Write_UINT8(s, 0); /* not an application frame */
-	Stream_Write_UINT64(s, 1); /* viewInstanceId */
-	Stream_Write_UINT64(s, 1); /* windowInstanceId */
+	Stream_Write_UINT64(s, t->window_id); /* viewInstanceId */
+	Stream_Write_UINT64(s, t->window_id); /* windowInstanceId */
 
 	rdptext_send_pdu(t, t->s2c_channel,
 			 RDPTXT_PDU_REGISTER_REMOTE_KEY_TARGET,
@@ -535,7 +536,7 @@ rdptext_send_host_foreground(struct rdptext_state *t)
 	if (!s)
 		return;
 	Stream_Write_UINT32(s, RDPTXT_HOST_ID);
-	Stream_Write_UINT64(s, 1);
+	Stream_Write_UINT64(s, t->window_id);
 
 	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_HOST_FOREGROUND,
 			 Stream_Buffer(s), 12);
@@ -772,6 +773,21 @@ rdptext_update_edit_focus(struct rdptext_state *t)
 	    (t->peer_ctx->item.flags & RDP_PEER_ACTIVATED))
 		active = t->bridge_api->get_active(t->peer_ctx->rdpBackend->compositor,
 						   &surface);
+
+	if (active && !t->registered && surface) {
+		/* first activation: register with the focused surface's
+		 * real RAIL window id */
+		struct weston_surface_rail_state *rail_state =
+			surface->backend_state;
+
+		t->window_id = rail_state ? rail_state->window_id : 0;
+		if (!t->window_id)
+			t->window_id = RDPTXT_HOST_ID;
+		rdptext_log(t, "first text input on surface %p, RAIL window "
+			    "id 0x%X; registering", (void *)surface,
+			    t->window_id);
+		rdptext_send_registrations(t);
+	}
 
 	if (active == t->focus_notified &&
 	    (!active || surface == t->focused_surface))
@@ -1292,7 +1308,10 @@ rdptext_handle_client_version(struct rdptext_state *t, wStream *s)
 		    "capability bitmask)",
 		    t->client_version_major, t->client_version_minor);
 
-	rdptext_send_registrations(t);
+	/* Registration is deferred until a text input actually activates,
+	 * so the key target can carry the real RAIL window instance id of
+	 * the focused surface - the client only engages the IME for
+	 * windows it knows from the RAIL channel. */
 }
 
 static void
