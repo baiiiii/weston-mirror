@@ -17,7 +17,7 @@ jobs:
         run: |
           # the ubuntu container image only enables main; freerdp2 lives in
           # universe
-          sed -i -E 's/^#[[:space:]]*(deb .*(universe|multiverse)[[:space:]]*$)//' /etc/apt/sources.list
+          sed -i -E 's/^#[[:space:]]*(deb .*(universe|multiverse)[[:space:]]*$)/\1/' /etc/apt/sources.list
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git ca-certificates build-essential pkg-config python3 \
