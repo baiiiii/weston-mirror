@@ -92,11 +92,15 @@ struct bridge_text_input {
 	bool entered; /* we sent enter() and no leave() yet */
 
 	/* keyboard_listener_attached_to doubles as the guard for removing
-	 * keyboard_focus_listener: it is cleared when the keyboard goes
-	 * away, because the focus_signal list dies with it. */
+	 * keyboard_focus_listener.  weston_keyboard has no destroy signal;
+	 * its object lives as long as the seat (release_keyboard only
+	 * resets it), so death is detected through the seat's
+	 * destroy_signal, which weston_seat_release emits after destroying
+	 * the keyboard. */
 	struct weston_keyboard *keyboard_listener_attached_to;
 	struct wl_listener keyboard_focus_listener;
-	struct wl_listener keyboard_destroy_listener;
+	bool seat_listener_attached;
+	struct wl_listener seat_destroy_listener;
 
 	/* same pattern for the entered surface */
 	struct weston_surface *surface_listener_attached_to;
@@ -113,8 +117,8 @@ static void bridge_notify_state(struct ti_bridge *bridge);
 static void ti_update_focus(struct bridge_text_input *ti);
 static void ti_keyboard_focus_handler(struct wl_listener *listener,
 				      void *data);
-static void ti_keyboard_destroy_handler(struct wl_listener *listener,
-					void *data);
+static void ti_seat_destroy_handler(struct wl_listener *listener,
+				    void *data);
 
 static struct bridge_text_input *
 ti_from_resource(struct wl_resource *resource)
@@ -169,22 +173,27 @@ ti_attach_keyboard_listener(struct bridge_text_input *ti)
 	ti->keyboard_focus_listener.notify = ti_keyboard_focus_handler;
 	wl_signal_add(&keyboard->focus_signal,
 		      &ti->keyboard_focus_listener);
-	ti->keyboard_destroy_listener.notify = ti_keyboard_destroy_handler;
-	wl_signal_add(&keyboard->destroy_signal,
-		      &ti->keyboard_destroy_listener);
+	if (!ti->seat_listener_attached) {
+		ti->seat_destroy_listener.notify = ti_seat_destroy_handler;
+		wl_signal_add(&ti->seat->destroy_signal,
+			      &ti->seat_destroy_listener);
+		ti->seat_listener_attached = true;
+	}
 	ti->keyboard_listener_attached_to = keyboard;
 }
 
 static void
-ti_keyboard_destroy_handler(struct wl_listener *listener, void *data)
+ti_seat_destroy_handler(struct wl_listener *listener, void *data)
 {
 	struct bridge_text_input *ti =
 		container_of(listener, struct bridge_text_input,
-			     keyboard_destroy_listener);
+			     seat_destroy_listener);
 
-	/* The signal list dies with the keyboard; do not remove the
-	 * focus listener link, just forget about it. */
+	/* weston_seat_release() destroyed the keyboard before emitting this
+	 * signal, so both signal lists are gone; forget about them without
+	 * removing any links. */
 	ti->keyboard_listener_attached_to = NULL;
+	ti->seat_listener_attached = false;
 	bridge_notify_state(ti->bridge);
 }
 
@@ -401,6 +410,9 @@ ti_unbind(struct wl_resource *resource)
 	if (ti->keyboard_listener_attached_to &&
 	    ti->keyboard_listener_attached_to == ti_get_keyboard(ti))
 		wl_list_remove(&ti->keyboard_focus_listener.link);
+
+	if (ti->seat_listener_attached)
+		wl_list_remove(&ti->seat_destroy_listener.link);
 
 	if (ti->surface_listener_attached_to)
 		wl_list_remove(&ti->surface_destroy_listener.link);
