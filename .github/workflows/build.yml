@@ -25,6 +25,7 @@ jobs:
             libpixman-1-dev libdrm-dev libevdev-dev libinput-dev \
             libxkbcommon-dev libpng-dev libjpeg-dev \
             libcairo2-dev libpango1.0-dev libglib2.0-dev libwebp-dev \
+            librsvg2-dev \
             libsystemd-dev libdbus-1-dev libudev-dev \
             cmake libssl-dev
 
