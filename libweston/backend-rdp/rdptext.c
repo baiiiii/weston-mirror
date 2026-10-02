@@ -1388,8 +1388,10 @@ rdptext_handle_acknowledge_operation(struct rdptext_state *t, wStream *s)
 static void
 rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 {
-	UINT32 size;
+	UINT32 size, start;
 	UINT16 pdu_id;
+
+	start = Stream_GetPosition(s);
 
 	if (Stream_GetRemainingLength(s) < RDPTXT_HEADER_SIZE)
 		return;
@@ -1455,6 +1457,17 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 		rdptext_verbose(t, "PDU 0x%04X (%u bytes) ignored", pdu_id,
 				size);
 		break;
+	}
+
+	/* handlers may consume only part of the payload; skip to the end of
+	 * this PDU (total on wire = 4-byte size field + size) so the pump
+	 * loop resumes at the next message */
+	{
+		UINT32 pos = Stream_GetPosition(s);
+		UINT32 end = start + 4 + size;
+
+		if (end > pos && end - pos <= Stream_GetRemainingLength(s))
+			Stream_Seek(s, end - pos);
 	}
 }
 
