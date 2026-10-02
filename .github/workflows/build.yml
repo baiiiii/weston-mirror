@@ -1,0 +1,54 @@
+name: weston standalone build
+
+# Manual trigger only - this is a fast compile check for iterating on
+# source changes without running the full WSLg image pipeline in
+# wslg_custom. No artifacts are produced or uploaded.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: meson build (ubuntu 22.04)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:22.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates build-essential pkg-config python3 \
+            meson ninja-build \
+            libwayland-dev wayland-protocols \
+            libpixman-1-dev libdrm-dev libevdev-dev libinput-dev \
+            libxkbcommon-dev libpng-dev libjpeg-dev \
+            libcairo2-dev libpango1.0-dev libglib2.0-dev \
+            libfreerdp2-dev libfreerdp-server2-2-dev libwinpr2-dev
+
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same meson flags as the WSLg image build (see wslg_custom build log),
+      # with two deviations to trim dependencies:
+      #   -Drenderer-gl=false  -> no Mesa/EGL headers needed; WSLg uses the
+      #                           pixman renderer anyway
+      #   -Dxwayland=false     -> no X11/xcb headers needed; xwayland sources
+      #                           are unaffected by the IME work
+      - name: Configure
+        run: |
+          meson setup build --buildtype=debugoptimized \
+            -Dbackend-default=rdp \
+            -Dbackend-drm=false -Dbackend-drm-screencast-vaapi=false \
+            -Dbackend-headless=false -Dbackend-wayland=false -Dbackend-x11=false \
+            -Dbackend-fbdev=false -Drenderer-gl=false \
+            -Dcolor-management-colord=false -Dcolor-management-lcms=false \
+            -Dscreenshare=false -Dsystemd=false -Dwslgd=true \
+            -Dremoting=false -Dpipewire=false \
+            -Dshell-fullscreen=false -Dshell-ivi=false -Dshell-kiosk=false \
+            -Ddemo-clients=false -Dsimple-clients=[] -Dtools=[] \
+            -Dresize-pool=false -Dwcap-decode=false -Dtest-junit-xml=false
+
+      - name: Build
+        run: ninja -C build
