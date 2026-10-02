@@ -26,12 +26,31 @@ jobs:
             libxkbcommon-dev libpng-dev libjpeg-dev \
             libcairo2-dev libpango1.0-dev libglib2.0-dev libwebp-dev \
             libsystemd-dev libdbus-1-dev libudev-dev \
-            freerdp2-dev libwinpr2-dev
+            cmake libssl-dev
 
       - name: Check out source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # weston's rdprail backend uses WSLg-specific FreeRDP 2.x constants
+      # that distro freerdp2 (2.6.1) does not define, so build the same
+      # FreeRDP the WSLg image build uses instead of the distro package
+      - name: Build FreeRDP (WSLg fork)
+        run: |
+          git clone --depth 1 --branch working \
+            https://github.com/baiiiii/FreeRDP-mirror /opt/FreeRDP-src
+          cmake -S /opt/FreeRDP-src -B /opt/FreeRDP-src/build \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DWITH_SERVER=ON -DWITH_CLIENT=OFF -DWITH_SAMPLE=OFF \
+            -DWITH_X11=OFF -DWITH_WAYLAND=OFF -DWITH_DIRECTFB=OFF \
+            -DWITH_ALSA=OFF -DWITH_OSS=OFF -DWITH_PULSE=OFF -DWITH_CUPS=OFF \
+            -DWITH_PCSC=OFF -DWITH_JPEG=OFF -DWITH_OPENH264=OFF \
+            -DWITH_GSM=OFF -DWITH_LAME=OFF -DWITH_SOXR=OFF -DWITH_FFMPEG=OFF \
+            -DWITH_GSTREAMER_1_0=OFF -DWITH_MANPAGES=OFF
+          cmake --build /opt/FreeRDP-src/build --parallel 4
+          cmake --install /opt/FreeRDP-src/build
+          ldconfig
 
       # Same meson flags as the WSLg image build (see wslg_custom build log),
       # with two deviations to trim dependencies:
