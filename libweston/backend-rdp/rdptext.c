@@ -1621,11 +1621,13 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 	case RDPTXT_PDU_SET_SELECTION:
 	case RDPTXT_PDU_UPDATE_FORMAT:
 	case RDPTXT_PDU_RECONVERSION_CANDIDATES:
-		rdptext_verbose(t, "PDU 0x%04X ignored", pdu_id);
+		rdptext_log(t, "C2S PDU 0x%04X ignored", pdu_id);
 		break;
 	default:
-		rdptext_verbose(t, "PDU 0x%04X (%u bytes) ignored", pdu_id,
-				size);
+		rdptext_log(t, "UNKNOWN C2S PDU 0x%04X (%u bytes)", pdu_id,
+			    size);
+		if (Stream_GetRemainingLength(s) >= 32)
+			rdptext_hex_dump(t, Stream_Pointer(s), 32);
 		break;
 	}
 
