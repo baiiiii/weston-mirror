@@ -115,6 +115,8 @@
 #define RDPTXT_PDU_SET_COMPOSITION_INFO            0x0205
 #define RDPTXT_PDU_RECONVERSION_CANDIDATES         0x0206
 #define RDPTXT_PDU_UPDATE_INPUT_PROFILE            0x0208
+#define RDPTXT_PDU_UPDATE_MODE                     0x0209
+#define RDPTXT_PDU_SET_CONVERSION_MODE             0x020A
 #define RDPTXT_PDU_ACKNOWLEDGE_OPERATION           0x020B
 #define RDPTXT_PDU_ERROR_REPORT                    0x020C
 #define RDPTXT_PDU_REGISTER_REMOTE_TEXT_TARGET     0x0300
@@ -126,15 +128,22 @@
 #define RDPTXT_PDU_HOST_FOREGROUND                 0x030A
 #define RDPTXT_PDU_SELECTION_CHANGED               0x030B
 #define RDPTXT_PDU_TEXT_CHANGED                    0x030C
+#define RDPTXT_PDU_GEOMETRY_CHANGED                0x030F
 #define RDPTXT_PDU_NOTIFY_SERVER_VERSION           0x031A
 #define RDPTXT_PDU_ACKNOWLEDGE_REMOTE_OPERATION    0x0312
 #define RDPTXT_PDU_ACKNOWLEDGE_KEY_EVENT           0x0313
 #define RDPTXT_PDU_INPUT_PROFILE_CHANGED           0x0314
 #define RDPTXT_PDU_REMOTE_TEXT_TARGET_THREAD_PROPS 0x0322
+#define RDPTXT_PDU_OCCLUDING_VIEWS                 0x0400
 #define RDPTXT_PDU_REMOTE_INTEGRATION_STATUS       0x0602
 #define RDPTXT_PDU_REREGISTRATION_REQUEST          0x0603
 #define RDPTXT_PDU_NOTIFY_CLIENT_VERSION           0x0604
 #define RDPTXT_PDU_REPORT_CLIENT_OPTIONS           0x0605
+
+/* RDPTXT_UPDATE_MODE_PDU TextInputFeature bits (spec 2.2.2.19) */
+#define RDPTXT_FEATURE_PREDICTION_MODE        0x00000001
+#define RDPTXT_FEATURE_LAYOUT_CHANGE_TRACKING 0x00000004
+#define RDPTXT_FEATURE_SELECTION_TRACKING     0x00000008
 
 /* RDPTXT_UPDATE_COMPOSITION_PDU compositionAction values */
 #define RDPTXT_COMPOSITION_ENTER  0x01
@@ -631,6 +640,50 @@ rdptext_get_cursor_bounds(struct rdptext_state *t, struct weston_surface *surfac
 	return true;
 }
 
+/* 计算聚焦编辑控件的客户端坐标矩形：优先应用报告的光标矩形，
+ * 否则回退到整个窗口区域。返回 false 表示无法获得有效矩形。 */
+static bool
+	rdptext_get_control_bounds(struct rdptext_state *t,
+				  struct weston_surface *surface,
+				  pixman_box32_t *bounds)
+{
+	struct rdp_backend *b = t->peer_ctx->rdpBackend;
+	struct weston_view *view = NULL;
+	struct weston_output *output;
+	float gx1, gy1, gx2, gy2;
+
+	if (!surface || surface->width <= 0 || surface->height <= 0)
+		return false;
+
+	if (rdptext_get_cursor_bounds(t, surface, bounds))
+		return true;
+
+	/* 应用未报告光标矩形时回退到整个窗口区域，
+	 * 避免全 0 矩形被客户端当作不可见控件 */
+	output = rdp_output_get_primary(b->compositor);
+	wl_list_for_each(view, &surface->views, surface_link) {
+		if (view->output) {
+			output = view->output;
+			break;
+		}
+	}
+	if (!view || !output)
+		return false;
+
+	weston_view_to_global_float(view, 0.f, 0.f, &gx1, &gy1);
+	weston_view_to_global_float(view, (float)surface->width,
+				    (float)surface->height, &gx2, &gy2);
+	bounds->x1 = (int32_t)gx1;
+	bounds->y1 = (int32_t)gy1;
+	bounds->x2 = (int32_t)gx2;
+	bounds->y2 = (int32_t)gy2;
+	to_client_coordinate(t->peer_ctx, output,
+			     &bounds->x1, &bounds->y1, NULL, NULL);
+	to_client_coordinate(t->peer_ctx, output,
+			     &bounds->x2, &bounds->y2, NULL, NULL);
+	return true;
+}
+
 /* EDIT_CONTROL_FOCUS_PDU:
  *   textInputClientId (4), controlBounds (16 TextInputRect),
  *   editInfo (36 EditControlInfo), gainingFocus (1),
@@ -641,7 +694,6 @@ static void
 	rdptext_send_edit_control_focus(struct rdptext_state *t, bool gaining,
 					struct weston_surface *surface)
 {
-	struct rdp_backend *b = t->peer_ctx->rdpBackend;
 	wStream *s;
 	pixman_box32_t bounds;
 	bool have_bounds = false;
@@ -653,43 +705,8 @@ static void
 	if (!s)
 		return;
 
-	if (gaining && surface) {
-		have_bounds = rdptext_get_cursor_bounds(t, surface, &bounds);
-		if (!have_bounds && surface->width > 0 &&
-		    surface->height > 0) {
-			/* 应用未报告光标矩形时回退到整个窗口区域，
-			 * 避免全 0 矩形被客户端当作不可见控件 */
-			struct weston_view *view = NULL;
-			struct weston_output *output;
-			float gx1, gy1, gx2, gy2;
-
-			output = rdp_output_get_primary(b->compositor);
-			wl_list_for_each(view, &surface->views, surface_link) {
-				if (view->output) {
-					output = view->output;
-					break;
-				}
-			}
-			if (view && output) {
-				weston_view_to_global_float(view, 0.f, 0.f,
-							    &gx1, &gy1);
-				weston_view_to_global_float(view,
-					(float)surface->width,
-					(float)surface->height, &gx2, &gy2);
-				bounds.x1 = (int32_t)gx1;
-				bounds.y1 = (int32_t)gy1;
-				bounds.x2 = (int32_t)gx2;
-				bounds.y2 = (int32_t)gy2;
-				to_client_coordinate(t->peer_ctx, output,
-						     &bounds.x1, &bounds.y1,
-						     NULL, NULL);
-				to_client_coordinate(t->peer_ctx, output,
-						     &bounds.x2, &bounds.y2,
-						     NULL, NULL);
-				have_bounds = true;
-			}
-		}
-	}
+	if (gaining && surface)
+		have_bounds = rdptext_get_control_bounds(t, surface, &bounds);
 
 	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
 	if (have_bounds) {
@@ -784,6 +801,116 @@ rdptext_send_text_changed(struct rdptext_state *t)
 	Stream_Free(s, TRUE);
 	rdptext_log(t, "TEXT_CHANGED sent (initial, opId %u)",
 		    t->notify_op_id);
+}
+
+/* GEOMETRY_CHANGED_PDU (server -> client), MS-RDPETXT 2.2.2.39:
+ *   textInputClientId (4), editControlId (4), controlBounds (16),
+ *   selection range (8), rangeBounds (16)
+ * 供 IME 定位候选窗；LayoutChangeTracking/SelectionTracking 模式下
+ * 控件移动/选区变化时也要发送。 */
+static void
+	rdptext_send_geometry_changed(struct rdptext_state *t,
+				      struct weston_surface *surface)
+{
+	wStream *s;
+	pixman_box32_t bounds;
+	bool have_bounds;
+
+	if (!rdptext_s2c_ok(t))
+		return;
+
+	s = Stream_New(NULL, 48);
+	if (!s)
+		return;
+
+	have_bounds = surface ? rdptext_get_control_bounds(t, surface,
+							  &bounds) : false;
+
+	Stream_Write_UINT32(s, RDPTXT_TEXT_TARGET_ID);
+	Stream_Write_UINT32(s, RDPTXT_EDIT_CONTROL_ID);
+	if (have_bounds) {
+		Stream_Write_UINT32(s, (UINT32)bounds.x1);
+		Stream_Write_UINT32(s, (UINT32)bounds.y1);
+		Stream_Write_UINT32(s, (UINT32)bounds.x2);
+		Stream_Write_UINT32(s, (UINT32)bounds.y2);
+	} else {
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+	}
+	Stream_Write_UINT32(s, 0); /* selection range begin (caret) */
+	Stream_Write_UINT32(s, 0); /* selection range end */
+	if (have_bounds) {
+		/* rangeBounds 与控件矩形一致（选区无独立矩形信息） */
+		Stream_Write_UINT32(s, (UINT32)bounds.x1);
+		Stream_Write_UINT32(s, (UINT32)bounds.y1);
+		Stream_Write_UINT32(s, (UINT32)bounds.x2);
+		Stream_Write_UINT32(s, (UINT32)bounds.y2);
+	} else {
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+		Stream_Write_UINT32(s, 0);
+	}
+
+	rdptext_send_pdu(t, t->s2c_channel, RDPTXT_PDU_GEOMETRY_CHANGED,
+			 Stream_Buffer(s), 48);
+	Stream_Free(s, TRUE);
+	rdptext_log(t, "GEOMETRY_CHANGED sent bounds:%d", have_bounds);
+}
+
+/* UPDATE_MODE_PDU (client -> server), MS-RDPETXT 2.2.2.19:
+ *   textInputHostId (4), textInputClientId (4), editControlId (4),
+ *   features (4), enabled (1), customRange (8),
+ *   predictionModeTriggerLength (4), triggers (variable),
+ *   operationId (4)
+ * PredictionMode 启用时规格要求服务端"发送上下文信息以启用候选生成"
+ * —— 响应 TEXT_CHANGED（编辑缓冲内容）+ GEOMETRY_CHANGED（控件矩形，
+ * 候选窗定位）。LayoutChangeTracking/SelectionTracking 启用时后续
+ * 控件移动/选区变化也发 GEOMETRY_CHANGED。 */
+static void
+	rdptext_handle_update_mode(struct rdptext_state *t, wStream *s)
+{
+	UINT32 host_id, client_id, control_id, features, trigger_len, op_id;
+	BYTE enabled;
+	struct weston_surface *surface = t->focused_surface;
+
+	if (Stream_GetRemainingLength(s) < 21)
+		return;
+
+	Stream_Read_UINT32(s, host_id);
+	Stream_Read_UINT32(s, client_id);
+	Stream_Read_UINT32(s, control_id);
+	Stream_Read_UINT32(s, features);
+	Stream_Read_UINT8(s, enabled);
+	/* customRange (8) + predictionModeTriggerLength (4) */
+	if (Stream_GetRemainingLength(s) < 12)
+		return;
+	Stream_Seek(s, 8);
+	Stream_Read_UINT32(s, trigger_len);
+	/* predictionModeTriggers (2 * trigger_len) + operationId (4) */
+	if (Stream_GetRemainingLength(s) < (UINT64)trigger_len * 2 + 4)
+		return;
+	Stream_Seek(s, (UINT64)trigger_len * 2);
+	Stream_Read_UINT32(s, op_id);
+
+	rdptext_log(t, "UPDATE_MODE features=0x%08X enabled=%u control=%u "
+		    "op=%u", features, enabled, control_id, op_id);
+
+	if (!t->focused_surface) {
+		/* 无聚焦表面则无上下文可给；记录即可 */
+		return;
+	}
+
+	if ((features & RDPTXT_FEATURE_PREDICTION_MODE) && enabled) {
+		/* 候选生成上下文：编辑缓冲 + 控件矩形 */
+		rdptext_send_text_changed(t);
+		rdptext_send_geometry_changed(t, surface);
+	} else if ((features & (RDPTXT_FEATURE_LAYOUT_CHANGE_TRACKING |
+				RDPTXT_FEATURE_SELECTION_TRACKING)) && enabled) {
+		rdptext_send_geometry_changed(t, surface);
+	}
 }
 
 /* ACKNOWLEDGE_REMOTE_OPERATION_PDU (server -> client):
@@ -1606,6 +1733,15 @@ rdptext_process_pdu(struct rdptext_state *t, wStream *s)
 		break;
 	case RDPTXT_PDU_UPDATE_INPUT_PROFILE:
 		rdptext_handle_update_input_profile(t, s);
+		break;
+	case RDPTXT_PDU_UPDATE_MODE:
+		rdptext_handle_update_mode(t, s);
+		break;
+	case RDPTXT_PDU_SET_CONVERSION_MODE:
+		rdptext_log(t, "SET_CONVERSION_MODE received (ignored)");
+		break;
+	case RDPTXT_PDU_OCCLUDING_VIEWS:
+		rdptext_log(t, "OCCLUDING_VIEWS received (ignored)");
 		break;
 	case RDPTXT_PDU_REREGISTRATION_REQUEST:
 		rdptext_handle_reregistration_request(t);
