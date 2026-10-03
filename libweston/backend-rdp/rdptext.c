@@ -16,8 +16,8 @@
  *
  * Transport: two dynamic virtual channels opened by this server via
  * WTSVirtualChannelOpenEx(WTS_CHANNEL_OPTION_DYNAMIC):
- *   - "WSL::TextBridge::ServerToClient": server -> client
- *   - "WSL::TextBridge::ClientToServer": client -> server
+ *   - "TextInput_ServerToClientDVC": server -> client
+ *   - "TextInput_ClientToServerDVC": client -> server
  *
  * Handshake sequence (MS-RDPETXT section 1.7 / 3.1.5):
  *
@@ -70,8 +70,8 @@
  * 这两个自定义 DVC。规格点名的 TextInput_*DVC 两名已被 msrdc 内置
  * remotetextplugin 占用（其连接处于禁用状态），故改用本名；
  * 通道内 PDU 逐字节为 MS-RDPETXT 协议。 */
-#define RDPTXT_CHANNEL_S2C "WSL::TextBridge::ServerToClient"
-#define RDPTXT_CHANNEL_C2S "WSL::TextBridge::ClientToServer"
+#define RDPTXT_CHANNEL_S2C "TextInput_ServerToClientDVC"
+#define RDPTXT_CHANNEL_C2S "TextInput_ClientToServerDVC"
 
 #define RDPTXT_HEADER_SIZE 6
 #define RDPTXT_VERSION_MAJOR 1
