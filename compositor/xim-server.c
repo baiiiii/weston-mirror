@@ -69,6 +69,7 @@
 #include <xcb/xcb.h>
 
 #include <libweston/libweston.h>
+#include <libweston/plugin-registry.h>
 #include <libweston/text-input-bridge.h>
 
 #include "shared/helpers.h"
