@@ -70,7 +70,6 @@
  * 使用规格点名的标准通道名（rdclientax.dll 内置的官方 RDPETXT 客户端监听它们）。
  * remotetextplugin 占用（其连接处于禁用状态），故改用本名；
  * 通道内 PDU 逐字节为 MS-RDPETXT 协议。 */
-#define RDPTXT_CHANNEL_S2C "WSL::TextBridge::ServerToClient"
 #define RDPTXT_CHANNEL_S2C "TextInput_ServerToClientDVC"
 #define RDPTXT_CHANNEL_C2S "TextInput_ClientToServerDVC"
 #define RDPTXT_HEADER_SIZE 6
