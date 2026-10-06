@@ -198,33 +198,6 @@ if get_option('wslgd')
 	env_modmap += 'wslgd-notify.so=@0@;'.format(plugin_wslgd_notify.full_path())
 endif
 
-if get_option('xim-server')
-	# XIM server for X11 (XWayland) clients.  The XIM wire protocol is
-	# implemented by xcb-imdkit; this module is the glue that connects it
-	# to the text-input bridge.  Skipped when the library is missing so a
-	# plain weston build keeps working.
-	# System copy first (Arch packages it); otherwise meson builds the
-	# subproject described by subprojects/xcb-imdkit.wrap, whose meson.build
-	# lives in subprojects/packagefiles/ because upstream's CMake build needs
-	# ECM, which the WSLg build container does not provide.
-	dep_xcb_imdkit = dependency('xcb-imdkit', required: false,
-				    fallback: ['xcb-imdkit', 'xcb_imdkit_dep'])
-	if dep_xcb_imdkit.found()
-		plugin_xim_server = shared_library(
-			'xim-server',
-			'xim-server.c',
-			include_directories: common_inc,
-			dependencies: [ dep_libweston_public, dep_xcb_imdkit ],
-			name_prefix: '',
-			install: true,
-			install_dir: dir_module_weston
-		)
-		env_modmap += 'xim-server.so=@0@;'.format(plugin_xim_server.full_path())
-	else
-		warning('xcb-imdkit not found: the XIM server module will not be built')
-	endif
-endif
-
 weston_ini_config = configuration_data()
 weston_ini_config.set('bindir', dir_bin)
 weston_ini_config.set('libexecdir', dir_libexec)
