@@ -26,6 +26,7 @@ generated_protocols = [
 	[ 'tablet', 'v2' ],
 	[ 'text-cursor-position', 'internal' ],
 	[ 'text-input', 'v1' ],
+	[ 'text-input-unstable-v3', 'internal' ],
 	[ 'viewporter', 'stable' ],
 	[ 'weston-debug', 'internal' ],
 	[ 'weston-desktop-shell', 'internal' ],

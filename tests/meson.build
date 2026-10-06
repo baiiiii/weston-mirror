@@ -214,6 +214,7 @@ if get_option('backend-rdp')
 			'rdpclip.c',
 			'rdprail.c',
 			'rdputil.c',
+			'rdptext.c',
 		),
 	]]
 endif

@@ -792,6 +792,8 @@ rdp_peer_context_free(freerdp_peer* client, RdpPeerContext* context)
 
 	rdp_rail_peer_context_free(client, context);
 
+	rdp_rdptext_destroy(context);
+
 	rdp_drdynvc_destroy(context);
 
 	if (context->vcm)
@@ -843,6 +845,10 @@ rdp_client_activity(int fd, uint32_t mask, void *data)
 			rdp_debug_error(rdpBackend, "failed to check FreeRDP WTS VC file descriptor for %p\n", client);
 			goto out_clean;
         	}
+
+		/* Drain MS-RDPETXT (Windows IME) traffic and drive the
+		 * version handshake once the channels are confirmed. */
+		rdp_rdptext_process(peerCtx);
 	}
 
 	return 0;
@@ -1130,6 +1136,12 @@ xf_peer_activate(freerdp_peer* client)
 		if (!rdp_drdynvc_init(client))
 			goto error_exit;
 
+		/* MS-RDPETXT: bridge the client-side (host) Windows IME.
+		 * Enhancement only — never abort the connection on failure. */
+		if (rdp_rdptext_init(client) < 0)
+			rdp_debug_error(b, "rdptext: MS-RDPETXT server init failed, "
+					   "IME bridging disabled\n");
+
 		if (settings->RemoteApplicationMode)
 			if (!rdp_rail_peer_activate(client))
 				goto error_exit;
@@ -1267,6 +1279,9 @@ error_exit:
 		peerCtx->audio_in_private = NULL;
 	}
 	rdp_rail_peer_context_free(client, peerCtx);
+
+	rdp_rdptext_destroy(peerCtx);
+
 	rdp_drdynvc_destroy(peerCtx);
 
 	return FALSE;
@@ -1381,8 +1396,8 @@ rdp_notify_wheel_scroll(RdpPeerContext *peerContext, UINT16 flags, uint32_t axis
 		ivalue = (0xff - ivalue) * -1;
 
 	/*
-	* Flip the scroll direction as the RDP direction is inverse of X/Wayland 
-	* for vertical scroll 
+	* Flip the scroll direction as the RDP direction is inverse of X/Wayland
+	* for vertical scroll
 	*/
 	if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
 		ivalue *= -1;
@@ -1415,7 +1430,7 @@ rdp_notify_wheel_scroll(RdpPeerContext *peerContext, UINT16 flags, uint32_t axis
 		weston_event.discrete = *accumWheelRotationDiscrete / 120;
 		weston_event.has_discrete = true;
 
-		rdp_debug_verbose(b, "wheel: value:%f discrete:%d\n", 
+		rdp_debug_verbose(b, "wheel: value:%f discrete:%d\n",
 			weston_event.value, weston_event.discrete);
 
 		weston_compositor_get_time(&time);
@@ -1424,7 +1439,7 @@ rdp_notify_wheel_scroll(RdpPeerContext *peerContext, UINT16 flags, uint32_t axis
 
 		*accumWheelRotationPrecise %= 12;
 		*accumWheelRotationDiscrete %= 120;
-		
+
 		return true;
 	}
 
@@ -1536,7 +1551,7 @@ xf_extendedMouseEvent(rdpInput *input, UINT16 flags, UINT16 x, UINT16 y)
 	return TRUE;
 }
 
-static BOOL 
+static BOOL
 xf_input_synchronize_event(rdpInput *input, UINT32 flags)
 {
 	freerdp_peer *client = input->context->peer;
@@ -1603,6 +1618,12 @@ xf_input_keyboard_event(rdpInput *input, UINT16 flags, UINT16 code)
 	if (!(peerContext->item.flags & RDP_PEER_ACTIVATED))
 		return TRUE;
 
+	/* With MS-RDPETXT integration active, the client may deliver keys
+	 * through both the legacy channel and the TextInput DVC; opt-in
+	 * suppression avoids double input (WESTON_RDPETXT_SUPPRESS_LEGACY_KEYS=1). */
+	if (rdp_rdptext_suppress_legacy_keys(peerContext))
+		return TRUE;
+
 	if (flags & KBD_FLAGS_DOWN) {
 		keyState = WL_KEYBOARD_KEY_STATE_PRESSED;
 		notify = 1;
@@ -1613,7 +1634,7 @@ xf_input_keyboard_event(rdpInput *input, UINT16 flags, UINT16 code)
 
 	if (keyboard && notify) {
 		full_code = code;
-		/* On Windows 10 client, certain locale's keyboard layout reports extended 
+		/* On Windows 10 client, certain locale's keyboard layout reports extended
 		   bit for right shift key (scancode 0x36) due to bug, so drop the bit here. */
 		keyboard_locale = client->context->settings->KeyboardLayout & 0xFFFF;
 		if (code == 0x36 && /* Right shift key */
@@ -1687,7 +1708,7 @@ send_release_key:
 
 			if (send_release_key) {
 				send_release_key = false;
-				assert(keyState == WL_KEYBOARD_KEY_STATE_PRESSED); 
+				assert(keyState == WL_KEYBOARD_KEY_STATE_PRESSED);
 				keyState = WL_KEYBOARD_KEY_STATE_RELEASED;
 				goto send_release_key;
 			}
