@@ -203,16 +203,12 @@ if get_option('xim-server')
 	# implemented by xcb-imdkit; this module is the glue that connects it
 	# to the text-input bridge.  Skipped when the library is missing so a
 	# plain weston build keeps working.
-	dep_xcb_imdkit = dependency('xcb-imdkit', required: false)
-	if not dep_xcb_imdkit.found()
-		# Not installed system-wide (Debian/Ubuntu do not package it):
-		# fall back to the CMake subproject from subprojects/xcb-imdkit.wrap.
-		cmake = import('cmake')
-		imdkit_proj = cmake.subproject('xcb-imdkit', required: false)
-		if imdkit_proj.found()
-			dep_xcb_imdkit = imdkit_proj.dependency('xcb-imdkit')
-		endif
-	endif
+	# System copy first (Arch packages it); otherwise meson builds the
+	# subproject described by subprojects/xcb-imdkit.wrap, whose meson.build
+	# lives in subprojects/packagefiles/ because upstream's CMake build needs
+	# ECM, which the WSLg build container does not provide.
+	dep_xcb_imdkit = dependency('xcb-imdkit', required: false,
+				    fallback: ['xcb-imdkit', 'xcb_imdkit_dep'])
 	if dep_xcb_imdkit.found()
 		plugin_xim_server = shared_library(
 			'xim-server',
