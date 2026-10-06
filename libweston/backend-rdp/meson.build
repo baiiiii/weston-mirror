@@ -67,6 +67,7 @@ srcs_rdp = [
         'rdpdisp.c',
         'rdpclip.c',
         'rdprail.c',
+        'rdptext.c',
         'rdputil.c',
 ]
 
