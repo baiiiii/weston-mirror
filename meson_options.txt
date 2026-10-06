@@ -3,6 +3,12 @@
 # It is hardcoded to cairo-image for now.
 
 option(
+	'xim-server',
+	type: 'boolean',
+	value: true,
+	description: 'XIM server module: bridge X11 clients to the remote IME'
+)
+option(
 	'backend-drm',
 	type: 'boolean',
 	value: true,

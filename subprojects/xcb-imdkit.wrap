@@ -1,0 +1,14 @@
+# xcb-imdkit provides the XIM wire protocol implementation used by the
+# xim-server module.  It is LGPL-2.1-only and is linked dynamically; see
+# compositor/xim-server.c for the rationale.
+#
+# Meson fetches and builds it as a CMake subproject when the system does not
+# already provide it (Arch: extra/xcb-imdkit; Debian/Ubuntu: not packaged).
+[wrap-git]
+directory = xcb-imdkit
+url = https://github.com/fcitx/xcb-imdkit.git
+revision = master
+depth = 1
+
+[provide]
+xcb-imdkit = xcb-imdkit_dep
