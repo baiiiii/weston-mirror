@@ -14,4 +14,5 @@
 directory = xcb-imdkit
 source_url = https://github.com/fcitx/xcb-imdkit/archive/refs/heads/master.tar.gz
 source_filename = xcb-imdkit-master.tar.gz
+source_hash = b8246da25ae4cba45dba616ee628d1285683fb2dcea0f776fc98442c460fb763
 patch_directory = xcb-imdkit
