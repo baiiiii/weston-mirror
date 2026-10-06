@@ -25,22 +25,31 @@ fs = import('fs')
 
 dep_xcb = dependency('xcb')
 
+# The release tarball has a single top level directory (xcb-imdkit-master/).
+# meson normally renames it to the wrap's `directory`, but do not rely on that:
+# detect which layout we ended up with.
+root = '.'
+if not fs.is_dir('src') and fs.is_dir('xcb-imdkit-master')
+	root = 'xcb-imdkit-master'
+elif not fs.is_dir('src')
+	error('xcb-imdkit sources not found: no src/ directory in the subproject')
+endif
+
 # Only the server side is needed (the xim-server module talks to X clients).
 # That drops imclient.c and clientprotocolhandler.c, and with them upstream's
-# private dependency on xcb-util and on the uthash *git submodule*.  uthash is
-# not part of the release tarball, so keeping those files would require
-# fetching it separately.
+# private dependency on xcb-util and on the uthash *git submodule*, which is
+# absent from the tarball.
 srcs = [
-	'src/parser.c',
-	'src/ximproto.c',
-	'src/imdkit.c',
-	'src/protocolhandler.c',
-	'src/message.c',
-	'src/common.c',
-	'src/encoding.c',
-	'src/xlibi18n/lcCT.c',
-	'src/xlibi18n/lcUTF8.c',
-	'src/xlibi18n/lcCharSet.c',
+	root / 'src/parser.c',
+	root / 'src/ximproto.c',
+	root / 'src/imdkit.c',
+	root / 'src/protocolhandler.c',
+	root / 'src/message.c',
+	root / 'src/common.c',
+	root / 'src/encoding.c',
+	root / 'src/xlibi18n/lcCT.c',
+	root / 'src/xlibi18n/lcUTF8.c',
+	root / 'src/xlibi18n/lcCharSet.c',
 ]
 
 # Header layout: imdkit.h includes "xcbimdkit_export.h" and "ximcommon.h"
@@ -48,11 +57,11 @@ srcs = [
 #
 # We deliberately do not build with -fvisibility=hidden: the header's export
 # macros are empty, so hiding symbols would make the library unusable.
-xcb_imdkit_inc = include_directories('.', 'src')
+xcb_imdkit_inc = include_directories('.', root, root / 'src')
 
 inc_dirs = [xcb_imdkit_inc]
-if fs.is_dir('uthash')
-	inc_dirs += include_directories('uthash', is_system: true)
+if fs.is_dir(root / 'uthash')
+	inc_dirs += include_directories(root / 'uthash', is_system: true)
 endif
 
 xcb_imdkit_lib = shared_library(
