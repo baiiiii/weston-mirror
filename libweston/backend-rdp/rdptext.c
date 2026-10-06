@@ -66,12 +66,23 @@
 
 #include "rdp.h"
 
-/* 客户端侧的文本输入桥（WSLDVCPlugin 的 WSL::TextBridge 组件）监听
- * 使用规格点名的标准通道名（rdclientax.dll 内置的官方 RDPETXT 客户端监听它们）。
- * remotetextplugin 占用（其连接处于禁用状态），故改用本名；
- * 通道内 PDU 逐字节为 MS-RDPETXT 协议。 */
-#define RDPTXT_CHANNEL_S2C "TextInput_ServerToClientDVC"
-#define RDPTXT_CHANNEL_C2S "TextInput_ClientToServerDVC"
+/* 客户端侧的文本输入桥（WSLDVCPlugin 的 WSL::TextBridge 组件）监听这两个
+ * 通道名；两侧必须完全一致，否则文本输入完全不通。
+ *
+ * 这里刻意【不使用】MS-RDPETXT 规格点名的
+ *   TextInput_ServerToClientDVC / TextInput_ClientToServerDVC，
+ * 原因（已实测确认）：
+ *   1. rdclientax.dll 内置的官方 RDPETXT 客户端（RemoteTextPlugin）占着规格名，
+ *      但它在 WSLg 会话里被产品门闸强制关闭
+ *      （/wslg 命令行开关 → TS_PROP_CORE_WSLGMODE_ENABLED=TRUE →
+ *       EnableTextProcessingRedirection 被按模式派生为 0），
+ *      实测打印 "Text processing redirection is disabled for this connection."
+ *      并返回 E_ACCESSDENIED，规格通道上不存在活着的客户端；
+ *   2. 即使改 .rdp（累计 26 种写法）也无法打开该门闸。
+ * 因此桥改用私有通道名，由我们自己的 WSLDVCPlugin 监听。
+ * 通道内 PDU 仍逐字节遵循 MS-RDPETXT 协议。 */
+#define RDPTXT_CHANNEL_S2C "WSL::TextBridge::ServerToClient"
+#define RDPTXT_CHANNEL_C2S "WSL::TextBridge::ClientToServer"
 #define RDPTXT_HEADER_SIZE 6
 #define RDPTXT_VERSION_MAJOR 1
 /* minor is a bitmask of protocol updates (MS-RDPETXT 1.3.5).  The live
