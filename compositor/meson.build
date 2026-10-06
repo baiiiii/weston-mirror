@@ -7,6 +7,7 @@ srcs_weston = [
 	'testsuite-util.c',
 	'text-backend.c',
 	'text-input-bridge.c',
+	'xim-server.c',
 	'weston-screenshooter.c',
 	text_input_unstable_v1_server_protocol_h,
 	text_input_unstable_v1_protocol_c,
