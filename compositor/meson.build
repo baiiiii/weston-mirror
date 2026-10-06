@@ -27,6 +27,8 @@ deps_weston = [
 	dep_threads,
 	dep_frdp,
 	dep_frdp_server,
+	# xim-server.c talks to XWayland directly.
+	dependency('xcb'),
 ]
 
 if get_option('xwayland')
