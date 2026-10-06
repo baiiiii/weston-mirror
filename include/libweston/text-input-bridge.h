@@ -103,6 +103,39 @@ struct weston_text_input_bridge_api {
 					      struct weston_surface *surface,
 					      void *user_data),
 				   void *user_data);
+
+	/* ---------------- X11 (XIM) support ---------------- */
+
+	/**
+	 * Register a sink for the X11/XIM path.
+	 *
+	 * The Wayland path delivers preedit/commit to the active
+	 * zwp_text_input_v3 client; X11 applications never speak that
+	 * protocol, so an XIM server has to relay the text instead.  When no
+	 * Wayland text input client is active, send_commit()/send_preedit()
+	 * fall back to this sink.  cb() is called with the committed UTF-8
+	 * text.  Pass NULL to unregister.  Only one sink is supported.
+	 */
+	void (*set_xim_sink)(struct weston_compositor *ec,
+			     void (*cb)(const char *text, void *user_data),
+			     void *user_data);
+
+	/**
+	 * Tell the bridge where the caret of the focused X11 window is, in
+	 * compositor (logical) coordinates.  This becomes the candidate
+	 * window anchor for the remote IME, exactly like the cursor
+	 * rectangle reported by a Wayland client.  focused=false clears it.
+	 */
+	void (*set_xim_focus)(struct weston_compositor *ec,
+			      bool focused, int32_t x, int32_t y);
+
+	/**
+	 * True while the remote (Windows) IME is composing: preedit text has
+	 * been pushed and no commit has arrived yet.  An XIM server uses this
+	 * to decide whether to consume a key (keep it away from the
+	 * application) or let it through.
+	 */
+	bool (*get_remote_composing)(struct weston_compositor *ec);
 };
 
 #ifdef __cplusplus
