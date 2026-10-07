@@ -182,6 +182,7 @@ struct xim_server {
 	struct wl_list clients;
 	uint16_t next_imid, next_icid;
 	bool connected;
+	bool connecting;
 };
 
 static struct xim_server *g_xim;
@@ -252,10 +253,28 @@ static void
 xim_server_request(struct weston_compositor *ec)
 {
 	struct xim_server *srv = g_xim;
+	const char *display;
 	uint64_t v = 1;
 
 	if (!srv || !srv->efd || srv->connected)
 		return;
+
+	/*
+	 * Establish the X connection here, on the RDP thread: it is pure libxcb
+	 * with no Wayland involvement, and doing the synchronous X handshake on
+	 * the compositor thread appears to be fatal.  The compositor thread then
+	 * only has to attach the finished connection to its event loop.
+	 */
+	if (!srv->conn && !srv->connecting) {
+		display = getenv("DISPLAY");
+		if (display && display[0] && xim_display_socket_ready(display)) {
+			srv->connecting = true;
+			srv->conn = xim_connect_display(display);
+			srv->connecting = false;
+			weston_log("xim-server: [dbg] RDP-thread connect -> %p\n",
+				   (void *)srv->conn);
+		}
+	}
 	weston_log("xim-server: [dbg] request from RDP thread\n");
 	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v) {
 		/* the loop is already awake; nothing to do */
@@ -1206,10 +1225,14 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	xim_install_crash_handler();
-	weston_log("xim-server: [dbg] connecting to %s via our own socket\n",
-		   display);
-	srv->conn = xim_connect_display(display);
-	weston_log("xim-server: [dbg] connect done conn=%p\n", (void *)srv->conn);
+	if (!srv->conn) {
+		weston_log("xim-server: [dbg] connecting on compositor thread\n");
+		srv->conn = xim_connect_display(display);
+		weston_log("xim-server: [dbg] connect done conn=%p\n",
+			   (void *)srv->conn);
+	} else {
+		weston_log("xim-server: [dbg] reusing RDP-thread connection\n");
+	}
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
 		weston_log("xim-server: X server %s not up yet, will retry\n",
 			   display);
