@@ -189,15 +189,7 @@ int xim_server_init(struct weston_compositor *ec);
  * for the lifetime of the compositor; only the connection is retried, so a
  * failure can never take the compositor down with it.
  */
-static int
-xim_retry_cb(void *data)
-{
-	struct xim_server *srv = data;
 
-	if (!srv->connected)
-		xim_server_init(srv->ec);
-	return 0;
-}
 
 /* ---- byte order helpers ---- */
 static uint16_t
@@ -1013,9 +1005,6 @@ xim_server_init(struct weston_compositor *ec)
 		/* Publish the object before the first attempt: the retry
 		 * callback re-enters this function and must find it. */
 		g_xim = srv;
-		loop = wl_display_get_event_loop(ec->wl_display);
-		srv->retry_timer = wl_event_loop_add_timer(loop,
-							   xim_retry_cb, srv);
 	}
 
 	display = getenv("DISPLAY");
@@ -1088,7 +1077,7 @@ xim_server_init(struct weston_compositor *ec)
 	return 0;
 
 retry:
-	if (srv->retry_timer)
-		wl_event_source_timer_update(srv->retry_timer, 500);
+	/* Nothing to arm: the RDP backend calls us again on its next
+	 * virtual-channel wake, which is where the retry comes from. */
 	return 0;
 }
