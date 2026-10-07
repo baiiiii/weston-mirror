@@ -65,6 +65,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/eventfd.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -962,6 +963,26 @@ xim_compositor_destroy(struct wl_listener *listener, void *data)
 	xim_destroy(srv);
 }
 
+/*
+ * Repeated xcb_connect() attempts on a display that is not there yet leave
+ * libxcb in a state where the next attempt crashes weston, so probe the socket
+ * first and only call xcb_connect() when it exists.
+ * DISPLAY is ":N" (or "host:N"); the socket is /tmp/.X11-unix/XN.
+ */
+static bool
+xim_display_socket_ready(const char *display)
+{
+	const char *colon;
+	char path[64];
+	struct stat st;
+
+	colon = strrchr(display, ':'');
+	if (!colon || !colon[1])
+		return false;
+	snprintf(path, sizeof path, "/tmp/.X11-unix/X%d", atoi(colon + 1));
+	return stat(path, &st) == 0;
+}
+
 static xcb_atom_t
 xim_atom(struct xim_server *srv, const char *name)
 {
@@ -1092,6 +1113,12 @@ xim_server_init(struct weston_compositor *ec)
 		xcb_disconnect(srv->conn);
 		srv->conn = NULL;
 	}
+	if (!xim_display_socket_ready(display)) {
+		weston_log("xim-server: X socket for %s not there yet, "
+			   "will retry\n", display);
+		goto retry;
+	}
+
 	weston_log("xim-server: [dbg] xcb_connect(%s) ...\n", display);
 	srv->conn = xcb_connect(display, NULL);
 	weston_log("xim-server: [dbg] xcb_connect done conn=%p err=%d\n",
