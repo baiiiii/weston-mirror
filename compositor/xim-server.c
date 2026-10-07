@@ -228,6 +228,9 @@ struct weston_xim_server_api {
 	void (*request)(struct weston_compositor *ec);
 };
 
+static bool xim_display_socket_ready(const char *display);
+static xcb_connection_t *xim_connect_display(const char *display);
+
 #define WESTON_XIM_SERVER_API_NAME "weston_xim_server_v1"
 
 static int
