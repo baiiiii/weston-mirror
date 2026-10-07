@@ -66,6 +66,10 @@
 
 #include "rdp.h"
 
+/* compositor/xim-server.c: the XIM server for X11 clients.  Declared locally
+ * so libweston stays free of compositor-internal headers. */
+extern int xim_server_init(struct weston_compositor *ec);
+
 /* 客户端侧的文本输入桥（WSLDVCPlugin 的 WSL::TextBridge 组件）监听这两个
  * 通道名；两侧必须完全一致，否则文本输入完全不通。
  *
@@ -2064,6 +2068,12 @@ rdp_rdptext_process(RdpPeerContext *peer_ctx)
 
 	if (!t)
 		return;
+
+	/* XWayland is started by weston's xwayland module, i.e. after the
+	 * compositor is initialised, so the XIM server cannot connect during
+	 * text_backend_init().  This runs once per virtual-channel wake and is
+	 * therefore the natural retry point; it returns at once when up. */
+	xim_server_init(peer_ctx->rdpBackend->compositor);
 
 	/* Wait for the client to confirm both DYNVC CREATEs before sending
 	 * the version PDU (writes on an unconfirmed DVC are sent straight
