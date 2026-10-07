@@ -976,7 +976,7 @@ xim_display_socket_ready(const char *display)
 	char path[64];
 	struct stat st;
 
-	colon = strrchr(display, ':'');
+	colon = strrchr(display, ':');
 	if (!colon || !colon[1])
 		return false;
 	snprintf(path, sizeof path, "/tmp/.X11-unix/X%d", atoi(colon + 1));
