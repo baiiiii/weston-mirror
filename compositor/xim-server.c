@@ -1037,7 +1037,9 @@ xim_connect_display(const char *display)
 		return NULL;
 	dnum = atoi(colon + 1);
 
+	weston_log("xim-server: [dbg] socket()...\n");
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	weston_log("xim-server: [dbg] socket fd=%d\n", fd);
 	if (fd < 0)
 		return NULL;
 
@@ -1046,6 +1048,7 @@ xim_connect_display(const char *display)
 	snprintf(addr.sun_path, sizeof addr.sun_path,
 		 "/tmp/.X11-unix/X%d", dnum);
 
+	weston_log("xim-server: [dbg] connect(%s)...\n", addr.sun_path);
 	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
 		weston_log("xim-server: connect() to %s failed: %s\n",
 			   addr.sun_path, strerror(errno));
@@ -1053,7 +1056,9 @@ xim_connect_display(const char *display)
 		return NULL;
 	}
 
+	weston_log("xim-server: [dbg] connect() ok, xcb handshake...\n");
 	conn = xcb_connect_to_fd(fd, NULL);
+	weston_log("xim-server: [dbg] handshake returned %p\n", (void *)conn);
 	if (!conn || xcb_connection_has_error(conn)) {
 		weston_log("xim-server: xcb_connect_to_fd failed\n");
 		if (conn)
