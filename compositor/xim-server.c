@@ -169,6 +169,7 @@ struct xim_server {
 	char *name;
 	struct wl_list clients;
 	uint16_t next_imid, next_icid;
+	bool connected;
 };
 
 static struct xim_server *g_xim;
@@ -181,33 +182,21 @@ int xim_server_init(struct weston_compositor *ec);
  * points at a socket that does not exist yet.  Retry once a second until the
  * X server is up instead of giving up.
  */
-static struct wl_event_source *g_retry_timer;
-
+/*
+ * weston starts XWayland from its own xwayland module, which runs after
+ * text_backend_init() - where we are called - so the first connection attempts
+ * legitimately fail.  The server object is therefore allocated once and kept
+ * for the lifetime of the compositor; only the connection is retried, so a
+ * failure can never take the compositor down with it.
+ */
 static int
 xim_retry_cb(void *data)
 {
-	struct weston_compositor *ec = data;
+	struct xim_server *srv = data;
 
-	weston_log("xim-server: retry: trying the X server again\n");
-	g_xim = NULL;
-	xim_server_init(ec);
+	if (!srv->connected)
+		xim_server_init(srv->ec);
 	return 0;
-}
-
-static void
-xim_schedule_retry(struct weston_compositor *ec)
-{
-	struct wl_event_loop *loop;
-
-	loop = wl_display_get_event_loop(ec->wl_display);
-
-	if (!g_retry_timer) {
-		g_retry_timer = wl_event_loop_add_timer(loop, xim_retry_cb, ec);
-		weston_log("xim-server: retry timer registered (%p)\n",
-			   (void *)g_retry_timer);
-	}
-	if (g_retry_timer)
-		wl_event_source_timer_update(g_retry_timer, 500);
 }
 
 /* ---- byte order helpers ---- */
@@ -899,6 +888,7 @@ xim_destroy(struct xim_server *srv)
 	struct xim_client *c, *ctmp;
 
 	if (srv->xcb_source) wl_event_source_remove(srv->xcb_source);
+	if (srv->retry_timer) wl_event_source_remove(srv->retry_timer);
 	if (srv->bridge) srv->bridge->set_xim_sink(srv->ec, NULL, NULL);
 
 	wl_list_for_each_safe(c, ctmp, &srv->clients, link) {
@@ -982,55 +972,79 @@ xim_register_server(struct xim_server *srv)
 int
 xim_server_init(struct weston_compositor *ec)
 {
-	struct xim_server *srv;
+	struct xim_server *srv = g_xim;
 	struct wl_event_loop *loop;
 	const char *display, *name;
 	int fd;
 
-	if (g_xim) return 0;
+	if (srv && srv->connected)
+		return 0;			/* already serving */
 
-	srv = zalloc(sizeof *srv);
-	if (!srv) return -1;
+	if (!srv) {
+		srv = zalloc(sizeof *srv);
+		if (!srv)
+			return -1;
 
-	srv->ec = ec;
-	wl_list_init(&srv->clients);
-	srv->next_imid = 1;
-	srv->next_icid = 1;
+		srv->ec = ec;
+		wl_list_init(&srv->clients);
+		srv->next_imid = 1;
+		srv->next_icid = 1;
+		srv->destroy_listener.notify = xim_compositor_destroy;
 
-	srv->bridge = weston_plugin_api_get(ec,
-			WESTON_TEXT_INPUT_BRIDGE_API_NAME,
-			sizeof(struct weston_text_input_bridge_api));
-	if (!srv->bridge) {
-		weston_log("xim-server: no text-input bridge; X11 input off\n");
-		free(srv);
-		return 0;
+		srv->bridge = weston_plugin_api_get(ec,
+				WESTON_TEXT_INPUT_BRIDGE_API_NAME,
+				sizeof(struct weston_text_input_bridge_api));
+		if (!srv->bridge) {
+			weston_log("xim-server: no text-input bridge; "
+				   "X11 input disabled\n");
+			free(srv);
+			return 0;
+		}
+
+		name = getenv("XIM_SERVER_NAME");
+		if (!name || !name[0])
+			name = DEFAULT_SERVER_NAME;
+		srv->name = strdup(name);
+		if (!srv->name) {
+			free(srv);
+			return -1;
+		}
+
+		/* Publish the object before the first attempt: the retry
+		 * callback re-enters this function and must find it. */
+		g_xim = srv;
+		loop = wl_display_get_event_loop(ec->wl_display);
+		srv->retry_timer = wl_event_loop_add_timer(loop,
+							   xim_retry_cb, srv);
 	}
 
 	display = getenv("DISPLAY");
 	if (!display || !display[0]) {
 		weston_log("xim-server: DISPLAY unset, will retry\n");
-		free(srv);
-		xim_schedule_retry(ec);
-		return 0;
+		goto retry;
 	}
 
-	name = getenv("XIM_SERVER_NAME");
-	if (!name || !name[0]) name = DEFAULT_SERVER_NAME;
-	srv->name = strdup(name);
-	if (!srv->name) { free(srv); return -1; }
-
+	if (srv->conn) {
+		xcb_disconnect(srv->conn);
+		srv->conn = NULL;
+	}
 	srv->conn = xcb_connect(display, NULL);
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
-		weston_log("xim-server: X server %s not up yet, will retry\n", display);
-		if (srv->conn) xcb_disconnect(srv->conn);
-		free(srv->name);
-		free(srv);
-		xim_schedule_retry(ec);
-		return 0;
+		weston_log("xim-server: X server %s not up yet, will retry\n",
+			   display);
+		if (srv->conn) {
+			xcb_disconnect(srv->conn);
+			srv->conn = NULL;
+		}
+		goto retry;
 	}
 
 	srv->screen = xcb_setup_roots_iterator(xcb_get_setup(srv->conn)).data;
-	if (!srv->screen) { xim_destroy(srv); return 0; }
+	if (!srv->screen) {
+		weston_log("xim-server: %s reports no screen, will retry\n",
+			   display);
+		goto retry;
+	}
 
 	srv->server_win = xcb_generate_id(srv->conn);
 	xcb_create_window(srv->conn, XCB_COPY_FROM_PARENT, srv->server_win,
@@ -1049,25 +1063,32 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
 
 	if (!xim_register_server(srv)) {
-		weston_log("xim-server: cannot register '%s'\n", srv->name);
-		xim_destroy(srv);
-		return 0;
+		weston_log("xim-server: cannot register '%s', will retry\n",
+			   srv->name);
+		goto retry;
 	}
 
 	fd = xcb_get_file_descriptor(srv->conn);
 	loop = wl_display_get_event_loop(ec->wl_display);
 	srv->xcb_source = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE,
 					       xim_handle_events, srv);
-	if (!srv->xcb_source) { xim_destroy(srv); return 0; }
+	if (!srv->xcb_source) {
+		weston_log("xim-server: cannot watch the X connection, "
+			   "will retry\n");
+		goto retry;
+	}
 
-	srv->destroy_listener.notify = xim_compositor_destroy;
 	wl_signal_add(&ec->destroy_signal, &srv->destroy_listener);
-
 	srv->bridge->set_xim_sink(ec, xim_bridge_commit, srv);
-	g_xim = srv;
+	srv->connected = true;
 
 	weston_log("xim-server: serving XIM on %s as '%s' "
 		   "(XIMPreeditNothing|XIMStatusNothing, UTF-8); "
 		   "use XMODIFIERS=@im=%s\n", display, srv->name, srv->name);
+	return 0;
+
+retry:
+	if (srv->retry_timer)
+		wl_event_source_timer_update(srv->retry_timer, 500);
 	return 0;
 }
