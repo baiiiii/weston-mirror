@@ -64,6 +64,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 #include <string.h>
 
 #include <xcb/xcb.h>
@@ -159,7 +161,10 @@ struct xim_server {
 	struct weston_compositor *ec;
 	const struct weston_text_input_bridge_api *bridge;
 	xcb_connection_t *conn;
-	struct wl_event_source *xcb_source;	struct wl_event_source *retry_timer;
+	struct wl_event_source *xcb_source;
+	struct wl_event_source *retry_timer;
+	struct wl_event_source *efd_source;
+	int efd;
 	struct wl_listener destroy_listener;
 	xcb_screen_t *screen;
 	xcb_window_t server_win;
@@ -180,10 +185,45 @@ static struct xim_server *g_xim;
  * the weston executable directly, so it drives the retry through this.
  */
 struct weston_xim_server_api {
+	/* Both must be called on the compositor thread. */
 	int (*init)(struct weston_compositor *ec);
+	/* Thread-safe: can be called from the RDP thread.  Just pokes an
+	 * eventfd so the compositor thread does the real work. */
+	void (*request)(struct weston_compositor *ec);
 };
 
 #define WESTON_XIM_SERVER_API_NAME "weston_xim_server_v1"
+
+static int
+xim_efd_cb(int fd, uint32_t mask, void *data)
+{
+	struct xim_server *srv = data;
+	uint64_t v;
+
+	if (mask & WL_EVENT_READABLE) {
+		while (read(fd, &v, sizeof v) == (ssize_t)sizeof v)
+			;
+		if (!srv->connected)
+			xim_server_init(srv->ec);	/* compositor thread ✓ */
+	}
+	return 0;
+}
+
+/*
+ * Called from the RDP backend, which runs on its own thread: it must not
+ * touch libwayland, so all it does is signal the compositor thread.
+ */
+static void
+xim_server_request(struct weston_compositor *ec)
+{
+	struct xim_server *srv = g_xim;
+	uint64_t v = 1;
+
+	if (!srv || !srv->efd || srv->connected)
+		return;
+	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v)
+		;	/* the loop is already awake; harmless */
+}
 
 int xim_server_init(struct weston_compositor *ec);
 
@@ -892,6 +932,8 @@ xim_destroy(struct xim_server *srv)
 
 	if (srv->xcb_source) wl_event_source_remove(srv->xcb_source);
 	if (srv->retry_timer) wl_event_source_remove(srv->retry_timer);
+	if (srv->efd_source) wl_event_source_remove(srv->efd_source);
+	if (srv->efd >= 0) close(srv->efd);
 	if (srv->bridge) srv->bridge->set_xim_sink(srv->ec, NULL, NULL);
 
 	wl_list_for_each_safe(c, ctmp, &srv->clients, link) {
@@ -991,9 +1033,17 @@ xim_server_init(struct weston_compositor *ec)
 		srv->ec = ec;
 		wl_list_init(&srv->clients);
 
+		srv->efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+		if (srv->efd >= 0) {
+			loop = wl_display_get_event_loop(ec->wl_display);
+			srv->efd_source = wl_event_loop_add_fd(loop, srv->efd,
+					WL_EVENT_READABLE, xim_efd_cb, srv);
+		}
+
 		{
 			static const struct weston_xim_server_api api = {
 				.init = xim_server_init,
+				.request = xim_server_request,
 			};
 			weston_plugin_api_register(ec, WESTON_XIM_SERVER_API_NAME,
 						   &api, sizeof api);

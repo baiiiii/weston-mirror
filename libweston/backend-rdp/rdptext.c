@@ -71,6 +71,9 @@
  * module and cannot call into the weston executable directly. */
 struct weston_xim_server_api {
 	int (*init)(struct weston_compositor *ec);
+	/* Thread-safe: only pokes an eventfd.  This function runs on the RDP
+	 * thread, so it must not touch libwayland. */
+	void (*request)(struct weston_compositor *ec);
 };
 #define WESTON_XIM_SERVER_API_NAME "weston_xim_server_v1"
 
@@ -2082,8 +2085,8 @@ rdp_rdptext_process(RdpPeerContext *peer_ctx)
 		xim = weston_plugin_api_get(peer_ctx->rdpBackend->compositor,
 					    WESTON_XIM_SERVER_API_NAME,
 					    sizeof *xim);
-		if (xim)
-			xim->init(peer_ctx->rdpBackend->compositor);
+		if (xim && xim->request)
+			xim->request(peer_ctx->rdpBackend->compositor);
 	}
 
 	/* Wait for the client to confirm both DYNVC CREATEs before sending
