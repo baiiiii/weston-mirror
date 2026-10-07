@@ -1089,7 +1089,6 @@ xim_server_init(struct weston_compositor *ec)
 	wl_signal_add(&ec->destroy_signal, &srv->destroy_listener);
 	srv->bridge->set_xim_sink(ec, xim_bridge_commit, srv);
 	srv->connected = true;
-	srv->api_registered = true;
 
 	weston_log("xim-server: serving XIM on %s as '%s' "
 		   "(XIMPreeditNothing|XIMStatusNothing, UTF-8); "
