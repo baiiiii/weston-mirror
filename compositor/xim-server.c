@@ -159,7 +159,7 @@ struct xim_server {
 	struct weston_compositor *ec;
 	const struct weston_text_input_bridge_api *bridge;
 	xcb_connection_t *conn;
-	struct wl_event_source *xcb_source;
+	struct wl_event_source *xcb_source;	struct wl_event_source *retry_timer;
 	struct wl_listener destroy_listener;
 	xcb_screen_t *screen;
 	xcb_window_t server_win;
@@ -172,6 +172,39 @@ struct xim_server {
 };
 
 static struct xim_server *g_xim;
+
+static int xim_server_init(struct weston_compositor *ec);
+
+/*
+ * weston starts XWayland itself, from the xwayland module, which is loaded
+ * after text_backend_init() runs - so at our first attempt DISPLAY usually
+ * points at a socket that does not exist yet.  Retry once a second until the
+ * X server is up instead of giving up.
+ */
+static struct wl_event_source *g_retry_timer;
+
+static int
+xim_retry_cb(void *data)
+{
+	struct weston_compositor *ec = data;
+
+	g_xim = NULL;
+	xim_server_init(ec);
+	return 0;
+}
+
+static void
+xim_schedule_retry(struct weston_compositor *ec)
+{
+	struct wl_event_loop *loop;
+
+	if (!g_retry_timer) {
+		loop = wl_display_get_event_loop(ec->wl_display);
+		g_retry_timer = wl_event_loop_add_timer(loop, xim_retry_cb, ec);
+	}
+	if (g_retry_timer)
+		wl_event_source_timer_update(g_retry_timer, 1000);
+}
 
 /* ---- byte order helpers ---- */
 static uint16_t
