@@ -66,6 +66,9 @@
 #include <stdlib.h>
 #include <sys/eventfd.h>
 #include <sys/stat.h>
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -179,6 +182,29 @@ struct xim_server {
 };
 
 static struct xim_server *g_xim;
+
+/* TEMPORARY: a crash inside libxcb leaves no trace in the log, so print a
+ * backtrace when it happens. */
+static void
+xim_crash_handler(int sig)
+{
+	void *bt[32];
+	int n;
+
+	n = backtrace(bt, 32);
+	weston_log("xim-server: FATAL signal %d, backtrace:\n", sig);
+	backtrace_symbols_fd(bt, n, STDERR_FILENO);
+	_exit(128 + sig);
+}
+
+static void
+xim_install_crash_handler(void)
+{
+	signal(SIGSEGV, xim_crash_handler);
+	signal(SIGABRT, xim_crash_handler);
+	signal(SIGBUS, xim_crash_handler);
+	signal(SIGILL, xim_crash_handler);
+}
 
 /*
  * Exposed through the plugin registry, exactly like the text-input bridge:
@@ -1120,6 +1146,7 @@ xim_server_init(struct weston_compositor *ec)
 		goto retry;
 	}
 
+	xim_install_crash_handler();
 	weston_log("xim-server: [dbg] xcb_connect(%s) ...\n", display);
 	srv->conn = xcb_connect(display, NULL);
 	weston_log("xim-server: [dbg] xcb_connect done conn=%p err=%d\n",
