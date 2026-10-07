@@ -174,6 +174,17 @@ struct xim_server {
 
 static struct xim_server *g_xim;
 
+/*
+ * Exposed through the plugin registry, exactly like the text-input bridge:
+ * libweston's RDP backend lives in a different module and cannot call into
+ * the weston executable directly, so it drives the retry through this.
+ */
+struct weston_xim_server_api {
+	int (*init)(struct weston_compositor *ec);
+};
+
+#define WESTON_XIM_SERVER_API_NAME "weston_xim_server_v1"
+
 int xim_server_init(struct weston_compositor *ec);
 
 /*
@@ -979,6 +990,14 @@ xim_server_init(struct weston_compositor *ec)
 
 		srv->ec = ec;
 		wl_list_init(&srv->clients);
+
+		{
+			static const struct weston_xim_server_api api = {
+				.init = xim_server_init,
+			};
+			weston_plugin_api_register(ec, WESTON_XIM_SERVER_API_NAME,
+						   &api, sizeof api);
+		}
 		srv->next_imid = 1;
 		srv->next_icid = 1;
 		srv->destroy_listener.notify = xim_compositor_destroy;
@@ -1070,6 +1089,7 @@ xim_server_init(struct weston_compositor *ec)
 	wl_signal_add(&ec->destroy_signal, &srv->destroy_listener);
 	srv->bridge->set_xim_sink(ec, xim_bridge_commit, srv);
 	srv->connected = true;
+	srv->api_registered = true;
 
 	weston_log("xim-server: serving XIM on %s as '%s' "
 		   "(XIMPreeditNothing|XIMStatusNothing, UTF-8); "

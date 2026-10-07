@@ -1096,6 +1096,10 @@ text_backend_init(struct weston_compositor *ec)
 	/* zwp_text_input_v3 bridge for remote IME providers (MS-RDPETXT). */
 	text_input_bridge_init(ec);
 
+	/* XIM server for X11 clients; registers its plugin API and makes a
+	 * first connection attempt.  The RDP backend drives the retries. */
+	xim_server_init(ec);
+
 
 	launch_input_method(text_backend);
 
