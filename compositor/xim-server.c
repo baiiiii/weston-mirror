@@ -221,6 +221,7 @@ xim_server_request(struct weston_compositor *ec)
 
 	if (!srv || !srv->efd || srv->connected)
 		return;
+	weston_log("xim-server: [dbg] request from RDP thread\n");
 	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v)
 		;	/* the loop is already awake; harmless */
 }
@@ -1025,6 +1026,8 @@ xim_server_init(struct weston_compositor *ec)
 	if (srv && srv->connected)
 		return 0;			/* already serving */
 
+	weston_log("xim-server: [dbg] init enter (srv=%p)\n", (void *)srv);
+
 	if (!srv) {
 		srv = zalloc(sizeof *srv);
 		if (!srv)
@@ -1033,7 +1036,9 @@ xim_server_init(struct weston_compositor *ec)
 		srv->ec = ec;
 		wl_list_init(&srv->clients);
 
+		weston_log("xim-server: [dbg] allocating eventfd\n");
 		srv->efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+		weston_log("xim-server: [dbg] eventfd=%d, adding to loop\n", srv->efd);
 		if (srv->efd >= 0) {
 			loop = wl_display_get_event_loop(ec->wl_display);
 			srv->efd_source = wl_event_loop_add_fd(loop, srv->efd,
@@ -1047,6 +1052,7 @@ xim_server_init(struct weston_compositor *ec)
 			};
 			weston_plugin_api_register(ec, WESTON_XIM_SERVER_API_NAME,
 						   &api, sizeof api);
+			weston_log("xim-server: [dbg] plugin API registered\n");
 		}
 		srv->next_imid = 1;
 		srv->next_icid = 1;
@@ -1086,7 +1092,11 @@ xim_server_init(struct weston_compositor *ec)
 		xcb_disconnect(srv->conn);
 		srv->conn = NULL;
 	}
+	weston_log("xim-server: [dbg] xcb_connect(%s) ...\n", display);
 	srv->conn = xcb_connect(display, NULL);
+	weston_log("xim-server: [dbg] xcb_connect done conn=%p err=%d\n",
+		   (void *)srv->conn,
+		   srv->conn ? xcb_connection_has_error(srv->conn) : -1);
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
 		weston_log("xim-server: X server %s not up yet, will retry\n",
 			   display);
@@ -1097,7 +1107,9 @@ xim_server_init(struct weston_compositor *ec)
 		goto retry;
 	}
 
+	weston_log("xim-server: [dbg] getting screen\n");
 	srv->screen = xcb_setup_roots_iterator(xcb_get_setup(srv->conn)).data;
+	weston_log("xim-server: [dbg] screen=%p\n", (void *)srv->screen);
 	if (!srv->screen) {
 		weston_log("xim-server: %s reports no screen, will retry\n",
 			   display);
@@ -1110,6 +1122,7 @@ xim_server_init(struct weston_compositor *ec)
 			  XCB_WINDOW_CLASS_INPUT_OUTPUT,
 			  srv->screen->root_visual, 0, NULL);
 
+	weston_log("xim-server: [dbg] window created, interning atoms\n");
 	srv->a_xim_servers = xim_atom(srv, "XIM_SERVERS");
 	srv->a_xim_xconnect = xim_atom(srv, "_XIM_XCONNECT");
 	srv->a_xim_protocol = xim_atom(srv, "_XIM_PROTOCOL");
@@ -1120,12 +1133,14 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_client_window = xim_atom(srv, "clientWindow");
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
 
+	weston_log("xim-server: [dbg] atoms done, registering server\n");
 	if (!xim_register_server(srv)) {
 		weston_log("xim-server: cannot register '%s', will retry\n",
 			   srv->name);
 		goto retry;
 	}
 
+	weston_log("xim-server: [dbg] registered, adding xcb fd\n");
 	fd = xcb_get_file_descriptor(srv->conn);
 	loop = wl_display_get_event_loop(ec->wl_display);
 	srv->xcb_source = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE,
