@@ -61,11 +61,14 @@
 
 #include "config.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <execinfo.h>
 #include <signal.h>
 #include <unistd.h>
@@ -204,6 +207,11 @@ xim_install_crash_handler(void)
 	signal(SIGABRT, xim_crash_handler);
 	signal(SIGBUS, xim_crash_handler);
 	signal(SIGILL, xim_crash_handler);
+	signal(SIGSYS, xim_crash_handler);
+	signal(SIGPIPE, xim_crash_handler);
+	signal(SIGTERM, xim_crash_handler);
+	signal(SIGINT, xim_crash_handler);
+	signal(SIGHUP, xim_crash_handler);
 }
 
 /*
@@ -1010,6 +1018,52 @@ xim_display_socket_ready(const char *display)
 	return stat(path, &st) == 0;
 }
 
+/*
+ * Connect to the display ourselves instead of letting xcb_connect() parse
+ * DISPLAY and probe for authentication: it exits the process without a signal
+ * and without returning, which leaves nothing to diagnose.  WSLg's XWayland
+ * uses no xauth, so an unauthenticated handshake is correct here.
+ */
+static xcb_connection_t *
+xim_connect_display(const char *display)
+{
+	struct sockaddr_un addr;
+	const char *colon;
+	xcb_connection_t *conn;
+	int fd, dnum;
+
+	colon = strrchr(display, ':');
+	if (!colon || !colon[1])
+		return NULL;
+	dnum = atoi(colon + 1);
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0)
+		return NULL;
+
+	memset(&addr, 0, sizeof addr);
+	addr.sun_family = AF_UNIX;
+	snprintf(addr.sun_path, sizeof addr.sun_path,
+		 "/tmp/.X11-unix/X%d", dnum);
+
+	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
+		weston_log("xim-server: connect() to %s failed: %s\n",
+			   addr.sun_path, strerror(errno));
+		close(fd);
+		return NULL;
+	}
+
+	conn = xcb_connect_to_fd(fd, NULL);
+	if (!conn || xcb_connection_has_error(conn)) {
+		weston_log("xim-server: xcb_connect_to_fd failed\n");
+		if (conn)
+			xcb_disconnect(conn);
+		close(fd);
+		return NULL;
+	}
+	return conn;
+}
+
 static xcb_atom_t
 xim_atom(struct xim_server *srv, const char *name)
 {
@@ -1147,11 +1201,10 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	xim_install_crash_handler();
-	weston_log("xim-server: [dbg] xcb_connect(%s) ...\n", display);
-	srv->conn = xcb_connect(display, NULL);
-	weston_log("xim-server: [dbg] xcb_connect done conn=%p err=%d\n",
-		   (void *)srv->conn,
-		   srv->conn ? xcb_connection_has_error(srv->conn) : -1);
+	weston_log("xim-server: [dbg] connecting to %s via our own socket\n",
+		   display);
+	srv->conn = xim_connect_display(display);
+	weston_log("xim-server: [dbg] connect done conn=%p\n", (void *)srv->conn);
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
 		weston_log("xim-server: X server %s not up yet, will retry\n",
 			   display);
