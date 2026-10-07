@@ -173,7 +173,7 @@ struct xim_server {
 
 static struct xim_server *g_xim;
 
-static int xim_server_init(struct weston_compositor *ec);
+int xim_server_init(struct weston_compositor *ec);
 
 /*
  * weston starts XWayland itself, from the xwayland module, which is loaded
@@ -1004,8 +1004,9 @@ xim_server_init(struct weston_compositor *ec)
 
 	display = getenv("DISPLAY");
 	if (!display || !display[0]) {
-		weston_log("xim-server: DISPLAY unset; X11 input off\n");
+		weston_log("xim-server: DISPLAY unset, will retry\n");
 		free(srv);
+		xim_schedule_retry(ec);
 		return 0;
 	}
 
@@ -1016,10 +1017,11 @@ xim_server_init(struct weston_compositor *ec)
 
 	srv->conn = xcb_connect(display, NULL);
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
-		weston_log("xim-server: cannot connect to %s\n", display);
+		weston_log("xim-server: X server %s not up yet, will retry\n", display);
 		if (srv->conn) xcb_disconnect(srv->conn);
 		free(srv->name);
 		free(srv);
+		xim_schedule_retry(ec);
 		return 0;
 	}
 
