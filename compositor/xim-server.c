@@ -188,6 +188,7 @@ xim_retry_cb(void *data)
 {
 	struct weston_compositor *ec = data;
 
+	weston_log("xim-server: retry: trying the X server again\n");
 	g_xim = NULL;
 	xim_server_init(ec);
 	return 0;
@@ -198,12 +199,15 @@ xim_schedule_retry(struct weston_compositor *ec)
 {
 	struct wl_event_loop *loop;
 
+	loop = wl_display_get_event_loop(ec->wl_display);
+
 	if (!g_retry_timer) {
-		loop = wl_display_get_event_loop(ec->wl_display);
 		g_retry_timer = wl_event_loop_add_timer(loop, xim_retry_cb, ec);
+		weston_log("xim-server: retry timer registered (%p)\n",
+			   (void *)g_retry_timer);
 	}
 	if (g_retry_timer)
-		wl_event_source_timer_update(g_retry_timer, 1000);
+		wl_event_source_timer_update(g_retry_timer, 500);
 }
 
 /* ---- byte order helpers ---- */
