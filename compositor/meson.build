@@ -29,6 +29,7 @@ deps_weston = [
 	dep_frdp_server,
 	# xim-server.c talks to XWayland directly.
 	dependency('xcb'),
+	dependency('x11'),
 ]
 
 if get_option('xwayland')

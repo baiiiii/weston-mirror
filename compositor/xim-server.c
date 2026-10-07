@@ -75,6 +75,7 @@
 #include <unistd.h>
 #include <string.h>
 
+#include <X11/Xlib.h>
 #include <xcb/xcb.h>
 
 #include <libweston/libweston.h>
@@ -271,6 +272,13 @@ xim_server_request(struct weston_compositor *ec)
 	if (!srv->conn && !srv->connecting) {
 		display = getenv("DISPLAY");
 		if (display && display[0] && xim_display_socket_ready(display)) {
+			/* Is Xlib usable here where libxcb is fatal? */
+			{
+				Display *d = XOpenDisplay(NULL);
+				weston_log("xim-server: [dbg] XOpenDisplay -> %p\n", (void *)d);
+				if (d)
+					XCloseDisplay(d);
+			}
 			srv->connecting = true;
 			srv->conn = xim_connect_display(display);
 			srv->connecting = false;
