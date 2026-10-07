@@ -223,8 +223,9 @@ xim_server_request(struct weston_compositor *ec)
 	if (!srv || !srv->efd || srv->connected)
 		return;
 	weston_log("xim-server: [dbg] request from RDP thread\n");
-	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v)
-		;	/* the loop is already awake; harmless */
+	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v) {
+		/* the loop is already awake; nothing to do */
+	}
 }
 
 int xim_server_init(struct weston_compositor *ec);
