@@ -1,4 +1,28 @@
-
+/*
+ * Copyright © 2012 Openismus GmbH
+ * Copyright © 2012 Intel Corporation
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 #include "config.h"
 
@@ -410,7 +434,7 @@ bind_text_input_manager(struct wl_client *client,
 	struct text_input_manager *text_input_manager = data;
 	struct wl_resource *resource;
 
-	
+	/* No checking for duplicate binding necessary.  */
 	resource =
 		wl_resource_create(client,
 				   &zwp_text_input_manager_v1_interface, 1, id);
@@ -735,6 +759,7 @@ input_method_context_text_direction(struct wl_client *client,
 						      serial, direction);
 }
 
+
 static const struct zwp_input_method_context_v1_interface context_implementation = {
 	input_method_context_destroy,
 	input_method_context_commit_string,
@@ -793,6 +818,7 @@ input_method_context_create(struct text_input *input,
 	context->input = input;
 	context->input_method = input_method;
 	input_method->context = context;
+
 
 	zwp_input_method_v1_send_activate(binding, context->resource);
 }
@@ -920,7 +946,7 @@ respawn_input_method_process(struct text_backend *text_backend)
 	struct timespec time;
 	int64_t tdiff;
 
-	
+	/* if input_method dies more than 5 times in 10 seconds, give up */
 	weston_compositor_get_time(&time);
 	tdiff = timespec_sub_to_msec(&time,
 				     &text_backend->input_method.deathstamp);
@@ -1036,7 +1062,7 @@ text_backend_destroy(struct text_backend *text_backend)
 	wl_list_remove(&text_backend->seat_created_listener.link);
 
 	if (text_backend->input_method.client) {
-		
+		/* disable respawn */
 		wl_list_remove(&text_backend->client_listener.link);
 		wl_client_destroy(text_backend->input_method.client);
 	}
@@ -1067,10 +1093,8 @@ text_backend_init(struct weston_compositor *ec)
 
 	text_input_manager_create(ec);
 
-	
+	/* zwp_text_input_v3 bridge for remote IME providers (MS-RDPETXT). */
 	text_input_bridge_init(ec);
-
-	
 	xim_server_init(ec);
 
 	launch_input_method(text_backend);

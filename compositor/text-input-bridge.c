@@ -1,3 +1,5 @@
+
+
 #include "config.h"
 
 #include <stdlib.h>
@@ -17,7 +19,7 @@ struct ti_bridge {
 	struct wl_global *manager_global;
 	struct wl_listener destroy_listener;
 
-	struct wl_list text_inputs;
+	struct wl_list text_inputs; 
 
 	void (*state_cb)(bool active, struct weston_surface *surface,
 			 void *user_data);
@@ -36,28 +38,32 @@ struct bridge_text_input {
 	struct ti_bridge *bridge;
 
 	struct weston_seat *seat;
-	struct weston_surface *surface;
+	struct weston_surface *surface; 
 
+	
 	bool enabled;
 	int32_t cursor_x, cursor_y, cursor_w, cursor_h;
 	bool have_cursor_rect;
 	uint32_t content_hint;
 	uint32_t content_purpose;
 
+	
 	bool pending_enabled;
 	bool have_pending_cursor_rect;
 	int32_t pending_cursor_x, pending_cursor_y;
 	int32_t pending_cursor_w, pending_cursor_h;
 
-	uint32_t done_serial;
+	uint32_t done_serial;   
 
-	bool entered;
+	bool entered; 
 
+	
 	struct weston_keyboard *keyboard_listener_attached_to;
 	struct wl_listener keyboard_focus_listener;
 	bool seat_listener_attached;
 	struct wl_listener seat_destroy_listener;
 
+	
 	struct weston_surface *surface_listener_attached_to;
 	struct wl_listener surface_destroy_listener;
 
@@ -101,6 +107,7 @@ bridge_send_leave(struct bridge_text_input *ti)
 	if (!ti->entered)
 		return;
 
+	
 	if (ti->surface && ti->surface->resource)
 		zwp_text_input_v3_send_leave(ti->resource,
 					     ti->surface->resource);
@@ -140,6 +147,7 @@ ti_seat_destroy_handler(struct wl_listener *listener, void *data)
 		container_of(listener, struct bridge_text_input,
 			     seat_destroy_listener);
 
+	
 	ti->keyboard_listener_attached_to = NULL;
 	ti->seat_listener_attached = false;
 	bridge_notify_state(ti->bridge);
@@ -152,6 +160,7 @@ ti_surface_destroy_handler(struct wl_listener *listener, void *data)
 		container_of(listener, struct bridge_text_input,
 			     surface_destroy_listener);
 
+	
 	ti->surface_listener_attached_to = NULL;
 	ti->entered = false;
 	ti->surface = NULL;
@@ -267,6 +276,7 @@ ti_request_set_surrounding_text(struct wl_client *client,
 				const char *text, int32_t cursor,
 				int32_t anchor)
 {
+	
 }
 
 static void
@@ -318,6 +328,7 @@ ti_request_commit(struct wl_client *client, struct wl_resource *resource)
 		ti->have_pending_cursor_rect = false;
 	}
 
+	
 	ti_update_focus(ti);
 
 	bridge_notify_state(ti->bridge);
@@ -391,6 +402,7 @@ manager_get_text_input(struct wl_client *client,
 	wl_resource_set_implementation(ti->resource, &ti_implementation, ti,
 				       ti_unbind);
 
+	
 	ti_update_focus(ti);
 }
 
@@ -537,7 +549,6 @@ bridge_api_send_commit(struct weston_compositor *ec, const char *text)
 	if (!text)
 		text = "";
 
-=======
 	
 	g_bridge->remote_composing = false;
 
@@ -634,6 +645,7 @@ text_input_bridge_init(struct weston_compositor *ec)
 	bridge->destroy_listener.notify = bridge_destroy;
 	wl_signal_add(&ec->destroy_signal, &bridge->destroy_listener);
 
+	
 	bridge->manager_global =
 		wl_global_create(ec->wl_display,
 				 &zwp_text_input_manager_v3_interface, 1,
