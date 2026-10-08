@@ -131,6 +131,13 @@ struct xim_xwm_proxy {
 	xcb_connection_t *conn;
 };
 
+static void
+xim_mark(const char *s)
+{
+	write(STDERR_FILENO, s, strlen(s));
+	write(STDERR_FILENO, "\n", 1);
+}
+
 struct xim_xserver_proxy {
 	struct wl_display *wl_display;
 	struct wl_event_loop *loop;
@@ -170,13 +177,6 @@ xim_wm_connection(struct weston_compositor *ec)
 	if (xcb_connection_has_error(wm->conn))
 		return NULL;
 	return wm->conn;
-}
-
-static void
-xim_mark(const char *s)
-{
-	write(STDERR_FILENO, s, strlen(s));
-	write(STDERR_FILENO, "\n", 1);
 }
 
 struct weston_xim_server_api {
