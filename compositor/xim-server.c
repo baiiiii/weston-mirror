@@ -200,8 +200,6 @@ xim_server_request(struct weston_compositor *ec)
 	
 	if (!srv->conn && !srv->connecting) {
 		display = getenv("DISPLAY");
-		weston_log("xim-server: socket ready=%d
-", display && xim_display_socket_ready(display));
 		if (display && display[0] && xim_display_socket_ready(display)) {
 			
 			{

@@ -1719,16 +1719,12 @@ rdp_rdptext_process(RdpPeerContext *peer_ctx)
 	if (!t)
 		return;
 
-	weston_log("xim-server: rdptext_process entered, t=%p
-", (void *)t);
-
 	{
 		const struct weston_xim_server_api *xim;
 		xim = weston_plugin_api_get(peer_ctx->rdpBackend->compositor,
 					    WESTON_XIM_SERVER_API_NAME,
 					    sizeof *xim);
-		weston_log("xim-server: lookup in rdptext -> %p
-", (void *)xim);
+		weston_log("xim-server: lookup in rdptext -> %p\n", (void *)xim);
 		if (xim && xim->request)
 			xim->request(peer_ctx->rdpBackend->compositor);
 	}
@@ -1775,9 +1771,6 @@ rdp_rdptext_destroy(RdpPeerContext *peer_ctx)
 
 	if (!t)
 		return;
-
-	weston_log("xim-server: rdptext_process entered, t=%p
-", (void *)t);
 
 	if (t->bridge_api) {
 		if (t->focus_notified)
