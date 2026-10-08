@@ -135,30 +135,8 @@ xim_mark(const char *s)
 
 
 static void
-xim_crash_handler(int sig)
-{
-	void *bt[32];
-	int n;
-
-	n = backtrace(bt, 32);
-	weston_log("xim-server: FATAL signal %d, backtrace:\n", sig);
-	backtrace_symbols_fd(bt, n, STDERR_FILENO);
-	_exit(128 + sig);
-}
 
 static void
-xim_install_crash_handler(void)
-{
-	signal(SIGSEGV, xim_crash_handler);
-	signal(SIGABRT, xim_crash_handler);
-	signal(SIGBUS, xim_crash_handler);
-	signal(SIGILL, xim_crash_handler);
-	signal(SIGSYS, xim_crash_handler);
-	signal(SIGPIPE, xim_crash_handler);
-	signal(SIGTERM, xim_crash_handler);
-	signal(SIGINT, xim_crash_handler);
-	signal(SIGHUP, xim_crash_handler);
-}
 
 struct weston_xim_server_api {
 	
@@ -1087,7 +1065,6 @@ xim_server_init(struct weston_compositor *ec)
 		goto retry;
 	}
 
-	xim_install_crash_handler();
 	xim_mark("XIM-1-enter-connect");
 	if (!srv->conn) {
 		weston_log("xim-server: [dbg] connecting on compositor thread\n");
