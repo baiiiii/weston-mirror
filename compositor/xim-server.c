@@ -154,15 +154,19 @@ xim_wm_connection(struct weston_compositor *ec)
 	struct xim_xwm_proxy *wm;
 
 	api = weston_xwayland_get_api(ec);
+	xim_mark(api ? "XIM-wm-api-ok" : "XIM-wm-api-null");
 	if (!api || !api->get)
 		return NULL;
 	xw = api->get(ec);
+	xim_mark(xw ? "XIM-wm-get-ok" : "XIM-wm-get-null");
 	if (!xw)
 		return NULL;
 	xsp = (struct xim_xserver_proxy *)xw;
 	wm = xsp->wm;
+	xim_mark(wm ? "XIM-wm-ptr-ok" : "XIM-wm-ptr-null");
 	if (!wm || !wm->conn)
 		return NULL;
+	xim_mark(wm->conn ? "XIM-wm-conn-ok" : "XIM-wm-conn-null");
 	if (xcb_connection_has_error(wm->conn))
 		return NULL;
 	return wm->conn;
