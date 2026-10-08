@@ -1013,6 +1013,9 @@ xim_register_server(struct xim_server *srv)
 		atoms = calloc(2, sizeof *atoms);
 		if (!atoms) return false;
 	}
+	xcb_set_selection_owner(srv->conn, srv->server_win, self,
+			   XCB_CURRENT_TIME);
+
 	atoms[n++] = self;
 
 	xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
