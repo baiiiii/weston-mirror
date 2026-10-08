@@ -133,15 +133,10 @@ xim_mark(const char *s)
 	write(STDERR_FILENO, "\n", 1);
 }
 
-
-static void
-
-static void
-
 struct weston_xim_server_api {
-	
+
 	int (*init)(struct weston_compositor *ec);
-	
+
 	void (*request)(struct weston_compositor *ec);
 };
 
@@ -329,7 +324,7 @@ xim_report_focus(struct xim_server *srv)
 		srv->bridge->set_xim_focus(srv->ec, ic != NULL, 0, 0);
 		return;
 	}
-	
+
 	srv->bridge->set_xim_focus(srv->ec, true, ic->spot_x, ic->spot_y);
 }
 
@@ -351,7 +346,6 @@ xim_bridge_commit(const char *text, void *user_data)
 		return;
 	c = ic->client;
 
-	
 	xb_init(&b, c->order);
 	xb_u16(&b, ic->icid);
 	xb_u16(&b, XimLookupChars);
@@ -417,7 +411,7 @@ xim_on_connect(struct xim_client *c, const uint8_t *body, size_t len)
 {
 	struct xbuf b;
 	(void)body; (void)len;
-	
+
 	xb_init(&b, c->order);
 	xb_u16(&b, XIM_PROTOCOL_MAJOR);
 	xb_u16(&b, XIM_PROTOCOL_MINOR);
@@ -440,7 +434,7 @@ xim_on_open(struct xim_client *c, const uint8_t *body, size_t len)
 	c->opened = true;
 	weston_log("xim-server: XIM_OPEN from 0x%x locale=%s imid=%u\n",
 		   c->client_win, loc, c->imid);
-	
+
 	xb_init(&b, c->order);
 	xb_bytes(&b, c->srv->name, strlen(c->srv->name));
 	xb_pad(&b);
@@ -465,7 +459,6 @@ xim_on_encoding(struct xim_client *c)
 	const char *enc = "UTF-8";
 	size_t elen = strlen(enc);
 
-	
 	xb_init(&b, c->order);
 	xb_u16(&b, 1);
 	xb_u16(&b, (uint16_t)elen);
@@ -492,7 +485,7 @@ static void
 xim_on_get_im_values(struct xim_client *c)
 {
 	struct xbuf b;
-	
+
 	xb_init(&b, c->order);
 	xb_u16(&b, c->srv->a_input_style);
 	xb_u16(&b, XimType_XIMStyles);
@@ -620,7 +613,7 @@ xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_init(&b, c->order);
 	xb_bytes(&b, body, len);
 	if (composing) {
-		
+
 		if (b.len >= 6) {
 			uint16_t fl = rd16(b.data + 4, c->order);
 			fl &= (uint16_t)~0x0001;
@@ -1013,7 +1006,6 @@ xim_server_init(struct weston_compositor *ec)
 					WL_EVENT_READABLE, xim_efd_cb, srv);
 		}
 
-		{
 			static const struct weston_xim_server_api api = {
 				.init = xim_server_init,
 				.request = xim_server_request,
@@ -1045,7 +1037,6 @@ xim_server_init(struct weston_compositor *ec)
 			return -1;
 		}
 
-		
 		g_xim = srv;
 	}
 
@@ -1145,6 +1136,6 @@ xim_server_init(struct weston_compositor *ec)
 	return 0;
 
 retry:
-	
+
 	return 0;
 }
