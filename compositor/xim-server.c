@@ -848,9 +848,14 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 	if (!(mask & WL_EVENT_READABLE)) return 0;
 
 	while ((ev = xcb_poll_for_event(srv->conn))) {
+		weston_log("xim-server: EVENT type=0x%x send_event=%d\n",
+			   ev->response_type, (ev->response_type & 0x80) ? 1 : 0);
 		if ((ev->response_type & ~0x80) == XCB_CLIENT_MESSAGE) {
 			xcb_client_message_event_t *cm =
 				(xcb_client_message_event_t *)ev;
+			weston_log("xim-server: CM type=0x%x win=0x%x d0=0x%x d1=0x%x\n",
+				   cm->type, cm->window,
+				   (unsigned)cm->data.data32[0], (unsigned)cm->data.data32[1]);
 			if (cm->type == srv->a_xim_xconnect) {
 				xim_new_connection(srv, cm);
 			} else if (cm->type == srv->a_xim_protocol ||
@@ -1155,6 +1160,12 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_spot_location = xim_atom(srv, "spotLocation");
 	srv->a_client_window = xim_atom(srv, "clientWindow");
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
+
+	{
+		uint32_t evmask = XCB_EVENT_MASK_NO_EVENT;
+		xcb_change_window_attributes(srv->conn, srv->server_win,
+				   XCB_CW_EVENT_MASK, &evmask);
+	}
 
 	xim_mark("XIM-g-before-register-server");
 	if (!xim_register_server(srv)) {
