@@ -18,6 +18,7 @@
 
 #include <X11/Xlib.h>
 #include <xcb/xcb.h>
+#include <libweston/xwayland-api.h>
 
 #include <libweston/libweston.h>
 #include <libweston/plugin-registry.h>
@@ -125,6 +126,47 @@ struct xim_server {
 };
 
 static struct xim_server *g_xim;
+
+struct xim_xwm_proxy {
+	xcb_connection_t *conn;
+};
+
+struct xim_xserver_proxy {
+	struct wl_display *wl_display;
+	struct wl_event_loop *loop;
+	int abstract_fd;
+	struct wl_event_source *abstract_source;
+	int unix_fd;
+	struct wl_event_source *unix_source;
+	int display;
+	pid_t pid;
+	struct wl_client *client;
+	struct weston_compositor *compositor;
+	struct xim_xwm_proxy *wm;
+	struct wl_listener destroy_listener;
+};
+static xcb_connection_t *
+xim_wm_connection(struct weston_compositor *ec)
+{
+	const struct weston_xwayland_api *api;
+	struct weston_xwayland *xw;
+	struct xim_xserver_proxy *xsp;
+	struct xim_xwm_proxy *wm;
+
+	api = weston_xwayland_get_api(ec);
+	if (!api || !api->get)
+		return NULL;
+	xw = api->get(ec);
+	if (!xw)
+		return NULL;
+	xsp = (struct xim_xserver_proxy *)xw;
+	wm = xsp->wm;
+	if (!wm || !wm->conn)
+		return NULL;
+	if (xcb_connection_has_error(wm->conn))
+		return NULL;
+	return wm->conn;
+}
 
 static void
 xim_mark(const char *s)
@@ -910,6 +952,13 @@ xim_connect_display(const char *display)
 	}
 
 	weston_log("xim-server: [dbg] connect() ok, xcb handshake...\n");
+	xcb_connection_t *wmconn = xim_wm_connection(srv->ec);
+	xim_mark("XIM-w-checked-wm-connection");
+	if (wmconn) {
+		xim_mark("XIM-x-reusing-wm-connection");
+		close(fd);
+		return wmconn;
+	}
 	xim_mark("XIM-a-before-xcb_connect_to_fd");
 	conn = xcb_connect_to_fd(fd, NULL);
 	xim_mark("XIM-b-after-xcb_connect_to_fd");
