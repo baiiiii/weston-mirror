@@ -130,7 +130,9 @@ static void
 xim_mark(const char *s)
 {
 	write(STDERR_FILENO, s, strlen(s));
+	write(STDERR_FILENO, "\n", 1);
 }
+
 
 static void
 xim_crash_handler(int sig)
@@ -207,11 +209,9 @@ xim_server_request(struct weston_compositor *ec)
 					XCloseDisplay(d);
 			}
 			srv->connecting = true;
-			xim_mark("XIM-2-calling-helper\
-");
+		xim_mark("XIM-2-calling-helper");
 		srv->conn = xim_connect_display(display);
-		xim_mark("XIM-3-helper-returned\
-");
+	xim_mark("XIM-3-helper-returned");
 			srv->connecting = false;
 			weston_log("xim-server: [dbg] RDP-thread connect -> %p\n",
 				   (void *)srv->conn);
@@ -969,11 +969,9 @@ xim_connect_display(const char *display)
 	}
 
 	weston_log("xim-server: [dbg] connect() ok, xcb handshake...\n");
-	xim_mark("XIM-a-before-xcb_connect_to_fd\
-");
+	xim_mark("XIM-a-before-xcb_connect_to_fd");
 	conn = xcb_connect_to_fd(fd, NULL);
-	xim_mark("XIM-b-after-xcb_connect_to_fd\
-");
+	xim_mark("XIM-b-after-xcb_connect_to_fd");
 	weston_log("xim-server: [dbg] handshake returned %p\n", (void *)conn);
 	if (!conn || xcb_connection_has_error(conn)) {
 		weston_log("xim-server: xcb_connect_to_fd failed\n");
@@ -1120,13 +1118,12 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	xim_install_crash_handler();
+	xim_mark("XIM-1-enter-connect");
 	if (!srv->conn) {
 		weston_log("xim-server: [dbg] connecting on compositor thread\n");
-		xim_mark("XIM-2-calling-helper\
-");
+	xim_mark("XIM-2-calling-helper");
 		srv->conn = xim_connect_display(display);
-		xim_mark("XIM-3-helper-returned\
-");
+	xim_mark("XIM-3-helper-returned");
 		weston_log("xim-server: [dbg] connect done conn=%p\n",
 			   (void *)srv->conn);
 	} else {
@@ -1143,11 +1140,9 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	weston_log("xim-server: [dbg] getting screen\n");
-	xim_mark("XIM-c-before-get-setup\
-");
+	xim_mark("XIM-c-before-get-setup");
 	srv->screen = xcb_setup_roots_iterator(xcb_get_setup(srv->conn)).data;
-	xim_mark("XIM-d-after-get-setup\
-");
+	xim_mark("XIM-d-after-get-setup");
 	weston_log("xim-server: [dbg] screen=%p\n", (void *)srv->screen);
 	if (!srv->screen) {
 		weston_log("xim-server: %s reports no screen, will retry\n",
@@ -1155,16 +1150,14 @@ xim_server_init(struct weston_compositor *ec)
 		goto retry;
 	}
 
-	xim_mark("XIM-e-before-create-window\
-");
+	xim_mark("XIM-e-before-create-window");
 	srv->server_win = xcb_generate_id(srv->conn);
 	xcb_create_window(srv->conn, XCB_COPY_FROM_PARENT, srv->server_win,
 			  srv->screen->root, 0, 0, 1, 1, 0,
 			  XCB_WINDOW_CLASS_INPUT_OUTPUT,
 			  srv->screen->root_visual, 0, NULL);
 
-	xim_mark("XIM-f-after-create-window\
-");
+	xim_mark("XIM-f-after-create-window");
 	srv->a_xim_servers = xim_atom(srv, "XIM_SERVERS");
 	srv->a_xim_xconnect = xim_atom(srv, "_XIM_XCONNECT");
 	srv->a_xim_protocol = xim_atom(srv, "_XIM_PROTOCOL");
@@ -1175,16 +1168,14 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_client_window = xim_atom(srv, "clientWindow");
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
 
-	xim_mark("XIM-g-before-register-server\
-");
+	xim_mark("XIM-g-before-register-server");
 	if (!xim_register_server(srv)) {
 		weston_log("xim-server: cannot register '%s', will retry\n",
 			   srv->name);
 		goto retry;
 	}
 
-	xim_mark("XIM-h-after-register-server\
-");
+	xim_mark("XIM-h-after-register-server");
 	fd = xcb_get_file_descriptor(srv->conn);
 	loop = wl_display_get_event_loop(ec->wl_display);
 	srv->xcb_source = wl_event_loop_add_fd(loop, fd, WL_EVENT_READABLE,
@@ -1197,11 +1188,9 @@ xim_server_init(struct weston_compositor *ec)
 
 	wl_signal_add(&ec->destroy_signal, &srv->destroy_listener);
 	srv->bridge->set_xim_sink(ec, xim_bridge_commit, srv);
-	xim_mark("XIM-i-before-connected-true\
-");
+	xim_mark("XIM-i-before-connected-true");
 	srv->connected = true;
-	xim_mark("XIM-j-CONNECTED\
-");
+	xim_mark("XIM-j-CONNECTED");
 
 	weston_log("xim-server: serving XIM on %s as '%s' "
 		   "(XIMPreeditNothing|XIMStatusNothing, UTF-8); "
