@@ -926,6 +926,16 @@ xim_display_socket_ready(const char *display)
 static xcb_connection_t *
 xim_connect_display(const char *display)
 {
+	xcb_connection_t *direct;
+
+	xim_mark("XIM-y-trying-xcb_connect");
+	direct = xcb_connect(NULL, NULL);
+	xim_mark("XIM-z-xcb_connect-returned");
+	if (direct && !xcb_connection_has_error(direct)) {
+		xim_mark("XIM-z2-xcb_connect-usable");
+		return direct;
+	}
+	xim_mark("XIM-z3-xcb_connect-unusable");
 	struct sockaddr_un addr;
 	const char *colon;
 	xcb_connection_t *conn;
