@@ -1113,9 +1113,13 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	xim_mark("XIM-1-enter-connect");
-	srv->conn = xim_wm_connection(ec);
-	if (!srv->conn) {
+	if (!xim_wm_connection(ec)) {
 		weston_log("xim-server: XWayland has not loaded its WM yet, will retry\n");
+		goto retry;
+	}
+	srv->conn = xim_connect_display(display);
+	if (!srv->conn) {
+		weston_log("xim-server: X server %s not up yet, will retry\n", display);
 		goto retry;
 	}
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
