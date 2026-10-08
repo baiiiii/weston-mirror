@@ -952,7 +952,7 @@ xim_connect_display(const char *display)
 	}
 
 	weston_log("xim-server: [dbg] connect() ok, xcb handshake...\n");
-	xcb_connection_t *wmconn = xim_wm_connection(srv->ec);
+	xcb_connection_t *wmconn = g_xim ? xim_wm_connection(g_xim->ec) : NULL;
 	xim_mark("XIM-w-checked-wm-connection");
 	if (wmconn) {
 		xim_mark("XIM-x-reusing-wm-connection");
