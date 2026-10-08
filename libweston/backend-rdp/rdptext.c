@@ -15,6 +15,13 @@
 
 #include "rdp.h"
 
+struct weston_xim_server_api {
+	int (*init)(struct weston_compositor *ec);
+
+	void (*request)(struct weston_compositor *ec);
+};
+#define WESTON_XIM_SERVER_API_NAME "weston_xim_server_v1"
+
 #define RDPTXT_CHANNEL_S2C "WSL::TextBridge::ServerToClient"
 #define RDPTXT_CHANNEL_C2S "WSL::TextBridge::ClientToServer"
 
@@ -1711,6 +1718,16 @@ rdp_rdptext_process(RdpPeerContext *peer_ctx)
 
 	if (!t)
 		return;
+
+	{
+		const struct weston_xim_server_api *xim;
+		xim = weston_plugin_api_get(peer_ctx->rdpBackend->compositor,
+					    WESTON_XIM_SERVER_API_NAME,
+					    sizeof *xim);
+		weston_log("xim-server: lookup in rdptext -> %p\n", (void *)xim);
+		if (xim && xim->request)
+			xim->request(peer_ctx->rdpBackend->compositor);
+	}
 
 	if (!t->version_sent && !t->ready_failed && t->s2c_channel) {
 		if (rdptext_channel_is_ready(t->s2c_channel) &&

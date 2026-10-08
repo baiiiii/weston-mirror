@@ -22,6 +22,12 @@ struct ti_bridge {
 	void (*state_cb)(bool active, struct weston_surface *surface,
 			 void *user_data);
 	void *state_cb_user_data;
+
+	void (*xim_commit_cb)(const char *text, void *user_data);
+	void *xim_commit_user_data;
+	bool xim_focus;
+	int32_t xim_x, xim_y;
+	bool remote_composing;
 };
 
 struct bridge_text_input {
@@ -498,12 +504,14 @@ bridge_api_send_preedit(struct weston_compositor *ec, const char *text,
 	if (!g_bridge || g_bridge->ec != ec)
 		return;
 
+	if (!text)
+		text = "";
+
+	g_bridge->remote_composing = (text[0] != '\0');
+
 	ti = bridge_find_active(g_bridge);
 	if (!ti)
 		return;
-
-	if (!text)
-		text = "";
 
 	if (cursor_begin < 0 || cursor_end < 0) {
 		len = strlen(text);
@@ -524,16 +532,56 @@ bridge_api_send_commit(struct weston_compositor *ec, const char *text)
 	if (!g_bridge || g_bridge->ec != ec)
 		return;
 
-	ti = bridge_find_active(g_bridge);
-	if (!ti)
-		return;
-
 	if (!text)
 		text = "";
+
+	g_bridge->remote_composing = false;
+
+	ti = bridge_find_active(g_bridge);
+	if (!ti) {
+
+		if (g_bridge->xim_commit_cb)
+			g_bridge->xim_commit_cb(text,
+						g_bridge->xim_commit_user_data);
+		return;
+	}
 
 	zwp_text_input_v3_send_preedit_string(ti->resource, "", 0, 0);
 	zwp_text_input_v3_send_commit_string(ti->resource, text);
 	bridge_send_done(ti);
+}
+
+static void
+bridge_api_set_xim_sink(struct weston_compositor *ec,
+			void (*cb)(const char *text, void *user_data),
+			void *user_data)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return;
+
+	g_bridge->xim_commit_cb = cb;
+	g_bridge->xim_commit_user_data = user_data;
+}
+
+static void
+bridge_api_set_xim_focus(struct weston_compositor *ec,
+			 bool focused, int32_t x, int32_t y)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return;
+
+	g_bridge->xim_focus = focused;
+	g_bridge->xim_x = x;
+	g_bridge->xim_y = y;
+}
+
+static bool
+bridge_api_get_remote_composing(struct weston_compositor *ec)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return false;
+
+	return g_bridge->remote_composing;
 }
 
 static void
@@ -556,6 +604,9 @@ static const struct weston_text_input_bridge_api bridge_api = {
 	.send_preedit = bridge_api_send_preedit,
 	.send_commit = bridge_api_send_commit,
 	.set_state_listener = bridge_api_set_state_listener,
+	.set_xim_sink = bridge_api_set_xim_sink,
+	.set_xim_focus = bridge_api_set_xim_focus,
+	.get_remote_composing = bridge_api_get_remote_composing,
 };
 
 int

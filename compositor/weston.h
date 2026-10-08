@@ -121,3 +121,6 @@ wet_testsuite_data_get(void);
 #endif
 
 #endif
+
+int
+xim_server_init(struct weston_compositor *ec);
