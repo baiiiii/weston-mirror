@@ -1006,6 +1006,7 @@ xim_server_init(struct weston_compositor *ec)
 					WL_EVENT_READABLE, xim_efd_cb, srv);
 		}
 
+		{
 			static const struct weston_xim_server_api api = {
 				.init = xim_server_init,
 				.request = xim_server_request,
