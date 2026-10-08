@@ -194,6 +194,7 @@ xim_server_request(struct weston_compositor *ec)
 	const char *display;
 	uint64_t v = 1;
 
+	weston_log("xim-server: REQ srv=%p efd=%d connected=%d conn=%p\n", 			(void *)srv, srv ? srv->efd : -1, 			srv ? srv->connected : 0, srv ? (void *)srv->conn : NULL);
 	if (!srv || !srv->efd || srv->connected)
 		return;
 
