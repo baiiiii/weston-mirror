@@ -928,14 +928,6 @@ xim_connect_display(const char *display)
 {
 	xcb_connection_t *direct;
 
-	xim_mark("XIM-y-trying-xcb_connect");
-	direct = xcb_connect(NULL, NULL);
-	xim_mark("XIM-z-xcb_connect-returned");
-	if (direct && !xcb_connection_has_error(direct)) {
-		xim_mark("XIM-z2-xcb_connect-usable");
-		return direct;
-	}
-	xim_mark("XIM-z3-xcb_connect-unusable");
 	struct sockaddr_un addr;
 	const char *colon;
 	xcb_connection_t *conn;
@@ -1121,15 +1113,10 @@ xim_server_init(struct weston_compositor *ec)
 	}
 
 	xim_mark("XIM-1-enter-connect");
+	srv->conn = xim_wm_connection(ec);
 	if (!srv->conn) {
-		weston_log("xim-server: [dbg] connecting on compositor thread\n");
-	xim_mark("XIM-2-calling-helper");
-		srv->conn = xim_connect_display(display);
-	xim_mark("XIM-3-helper-returned");
-		weston_log("xim-server: [dbg] connect done conn=%p\n",
-			   (void *)srv->conn);
-	} else {
-		weston_log("xim-server: [dbg] reusing RDP-thread connection\n");
+		weston_log("xim-server: XWayland has not loaded its WM yet, will retry\n");
+		goto retry;
 	}
 	if (!srv->conn || xcb_connection_has_error(srv->conn)) {
 		weston_log("xim-server: X server %s not up yet, will retry\n",
