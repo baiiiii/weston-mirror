@@ -190,38 +190,7 @@ xim_efd_cb(int fd, uint32_t mask, void *data)
 static void
 xim_server_request(struct weston_compositor *ec)
 {
-	struct xim_server *srv = g_xim;
-	const char *display;
-	uint64_t v = 1;
-
-	weston_log("xim-server: REQ srv=%p efd=%d connected=%d conn=%p\n", 			(void *)srv, srv ? srv->efd : -1, 			srv ? srv->connected : 0, srv ? (void *)srv->conn : NULL);
-	if (!srv || !srv->efd || srv->connected)
-		return;
-
-	
-	if (!srv->conn && !srv->connecting) {
-		display = getenv("DISPLAY");
-		if (display && display[0] && xim_display_socket_ready(display)) {
-			
-			{
-				Display *d = XOpenDisplay(NULL);
-				weston_log("xim-server: [dbg] XOpenDisplay -> %p\n", (void *)d);
-				if (d)
-					XCloseDisplay(d);
-			}
-			srv->connecting = true;
-		xim_mark("XIM-2-calling-helper");
-		srv->conn = xim_connect_display(display);
-	xim_mark("XIM-3-helper-returned");
-			srv->connecting = false;
-			weston_log("xim-server: [dbg] RDP-thread connect -> %p\n",
-				   (void *)srv->conn);
-		}
-	}
-	weston_log("xim-server: [dbg] request from RDP thread\n");
-	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v) {
-		
-	}
+	struct xim_server *srv = g_xim; 	uint64_t v = 1;  	weston_log("xim-server: REQ srv=%p efd=%d connected=%d conn=%p\n", 			(void *)srv, srv ? srv->efd : -1, 			srv ? srv->connected : 0, srv ? (void *)srv->conn : NULL); 	if (!srv || !srv->efd || srv->connected) 		return;  	if (write(srv->efd, &v, sizeof v) != (ssize_t)sizeof v) { 	} 	weston_log("xim-server: REQ poked eventfd\n");
 }
 
 int xim_server_init(struct weston_compositor *ec);
