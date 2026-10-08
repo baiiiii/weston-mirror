@@ -1095,6 +1095,7 @@ text_backend_init(struct weston_compositor *ec)
 
 	/* zwp_text_input_v3 bridge for remote IME providers (MS-RDPETXT). */
 	text_input_bridge_init(ec);
+	xim_server_init(ec);
 
 	launch_input_method(text_backend);
 

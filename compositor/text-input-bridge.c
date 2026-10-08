@@ -22,6 +22,15 @@ struct ti_bridge {
 	void (*state_cb)(bool active, struct weston_surface *surface,
 			 void *user_data);
 	void *state_cb_user_data;
+
+	void (*xim_commit_cb)(const char *text, void *user_data);
+	void *xim_commit_user_data;
+	void (*xim_preedit_cb)(const char *text, int32_t cursor_begin,
+			       int32_t cursor_end, void *user_data);
+	void *xim_preedit_user_data;
+	bool xim_focus;
+	int32_t xim_x, xim_y;
+	bool remote_composing;
 };
 
 struct bridge_text_input {
@@ -451,20 +460,42 @@ bridge_find_active(struct ti_bridge *bridge)
 	return NULL;
 }
 
+static struct weston_surface *
+bridge_focused_surface(struct ti_bridge *bridge)
+{
+	struct weston_seat *seat;
+
+	wl_list_for_each(seat, &bridge->ec->seat_list, link) {
+		struct weston_keyboard *keyboard = weston_seat_get_keyboard(seat);
+
+		if (keyboard && keyboard->focus)
+			return keyboard->focus;
+	}
+
+	return NULL;
+}
+
 static bool
 bridge_api_get_active(struct weston_compositor *ec,
 		      struct weston_surface **out_surface)
 {
 	struct bridge_text_input *ti;
+	struct weston_surface *surface = NULL;
 
 	if (!g_bridge || g_bridge->ec != ec)
 		return false;
 
 	ti = bridge_find_active(g_bridge);
-	if (out_surface)
-		*out_surface = ti ? ti->surface : NULL;
+	if (ti) {
+		surface = ti->surface;
+	} else if (g_bridge->xim_focus) {
+		surface = bridge_focused_surface(g_bridge);
+	}
 
-	return ti != NULL;
+	if (out_surface)
+		*out_surface = surface;
+
+	return surface != NULL;
 }
 
 static bool
@@ -498,12 +529,20 @@ bridge_api_send_preedit(struct weston_compositor *ec, const char *text,
 	if (!g_bridge || g_bridge->ec != ec)
 		return;
 
+	if (!text)
+		text = "";
+
+	g_bridge->remote_composing = (text[0] != '\0');
+
+	if (g_bridge->xim_focus && g_bridge->xim_preedit_cb) {
+		g_bridge->xim_preedit_cb(text, cursor_begin, cursor_end,
+					 g_bridge->xim_preedit_user_data);
+		return;
+	}
+
 	ti = bridge_find_active(g_bridge);
 	if (!ti)
 		return;
-
-	if (!text)
-		text = "";
 
 	if (cursor_begin < 0 || cursor_end < 0) {
 		len = strlen(text);
@@ -524,16 +563,72 @@ bridge_api_send_commit(struct weston_compositor *ec, const char *text)
 	if (!g_bridge || g_bridge->ec != ec)
 		return;
 
-	ti = bridge_find_active(g_bridge);
-	if (!ti)
-		return;
-
 	if (!text)
 		text = "";
+
+	g_bridge->remote_composing = false;
+
+	if (g_bridge->xim_focus && g_bridge->xim_commit_cb) {
+		g_bridge->xim_commit_cb(text, g_bridge->xim_commit_user_data);
+		return;
+	}
+
+	ti = bridge_find_active(g_bridge);
+	if (!ti) {
+		if (g_bridge->xim_commit_cb)
+			g_bridge->xim_commit_cb(text,
+						g_bridge->xim_commit_user_data);
+		return;
+	}
 
 	zwp_text_input_v3_send_preedit_string(ti->resource, "", 0, 0);
 	zwp_text_input_v3_send_commit_string(ti->resource, text);
 	bridge_send_done(ti);
+}
+
+static void
+bridge_api_set_xim_sink(struct weston_compositor *ec,
+			void (*commit_cb)(const char *text, void *user_data),
+			void (*preedit_cb)(const char *text,
+					   int32_t cursor_begin,
+					   int32_t cursor_end,
+					   void *user_data),
+			void *user_data)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return;
+
+	g_bridge->xim_commit_cb = commit_cb;
+	g_bridge->xim_commit_user_data = user_data;
+	g_bridge->xim_preedit_cb = preedit_cb;
+	g_bridge->xim_preedit_user_data = user_data;
+}
+
+static void
+bridge_api_set_xim_focus(struct weston_compositor *ec,
+			 bool focused, int32_t x, int32_t y)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return;
+
+	if (g_bridge->xim_focus == focused &&
+	    g_bridge->xim_x == x && g_bridge->xim_y == y)
+		return;
+
+	g_bridge->xim_focus = focused;
+	g_bridge->xim_x = x;
+	g_bridge->xim_y = y;
+
+	bridge_notify_state(g_bridge);
+}
+
+static bool
+bridge_api_get_remote_composing(struct weston_compositor *ec)
+{
+	if (!g_bridge || g_bridge->ec != ec)
+		return false;
+
+	return g_bridge->remote_composing;
 }
 
 static void
@@ -556,6 +651,9 @@ static const struct weston_text_input_bridge_api bridge_api = {
 	.send_preedit = bridge_api_send_preedit,
 	.send_commit = bridge_api_send_commit,
 	.set_state_listener = bridge_api_set_state_listener,
+	.set_xim_sink = bridge_api_set_xim_sink,
+	.set_xim_focus = bridge_api_set_xim_focus,
+	.get_remote_composing = bridge_api_get_remote_composing,
 };
 
 int
