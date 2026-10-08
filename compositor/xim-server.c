@@ -1020,6 +1020,7 @@ xim_register_server(struct xim_server *srv)
 	}
 	xcb_set_selection_owner(srv->conn, srv->server_win, self,
 			   XCB_CURRENT_TIME);
+	xim_mark("XIM-k-selection-owner-set");
 
 	atoms[n++] = self;
 
