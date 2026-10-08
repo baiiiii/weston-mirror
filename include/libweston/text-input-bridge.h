@@ -33,6 +33,20 @@ struct weston_text_input_bridge_api {
 					      struct weston_surface *surface,
 					      void *user_data),
 				   void *user_data);
+
+	
+
+	
+	void (*set_xim_sink)(struct weston_compositor *ec,
+			     void (*cb)(const char *text, void *user_data),
+			     void *user_data);
+
+	
+	void (*set_xim_focus)(struct weston_compositor *ec,
+			      bool focused, int32_t x, int32_t y);
+
+	
+	bool (*get_remote_composing)(struct weston_compositor *ec);
 };
 
 #ifdef __cplusplus
