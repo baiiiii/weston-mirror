@@ -66,7 +66,7 @@
 
 #define XIM_STYLE_NOTHING		(0x0008u | 0x0400u)
 
-#define DEFAULT_SERVER_NAME		"wslgxim"
+#define DEFAULT_SERVER_NAME		"@server=wslgxim"
 #define XIM_PROTOCOL_MAJOR		1
 #define XIM_PROTOCOL_MINOR		0
 #define XIM_HEADER_SIZE			4
