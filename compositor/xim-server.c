@@ -1177,6 +1177,20 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
 
 	{
+		const char *empty = "";
+		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
+				   srv->server_win, srv->a_xim_protocol,
+				   XCB_ATOM_STRING, 8, 0, empty);
+		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
+				   srv->server_win, srv->a_xim_moredata,
+				   XCB_ATOM_STRING, 8, 0, empty);
+		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
+				   srv->server_win, srv->a_xim_xconnect,
+				   XCB_ATOM_STRING, 8, 0, empty);
+	}
+	xcb_flush(srv->conn);
+
+	{
 	uint32_t evmask = XCB_EVENT_MASK_NO_EVENT;
 		xcb_change_window_attributes(srv->conn, srv->server_win,
 				   XCB_CW_EVENT_MASK, &evmask);
