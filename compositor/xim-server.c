@@ -889,6 +889,8 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 			}
 		}
 		if ((ev->response_type & ~0x80) == XCB_CLIENT_MESSAGE) {
+			if (ev->response_type & 0x80)
+				continue;
 			xcb_client_message_event_t *cm =
 				(xcb_client_message_event_t *)ev;
 			weston_log("xim-server: CM type=0x%x win=0x%x d0=0x%x d1=0x%x d2=0x%x d3=0x%x d4=0x%x fmt=%d\n",
