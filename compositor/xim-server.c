@@ -858,6 +858,23 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 				(xcb_property_notify_event_t *)ev;
 			weston_log("xim-server: PROP atom=0x%x win=0x%x state=%d\n",
 				   pn->atom, pn->window, pn->state);
+			if (pn->window == srv->server_win && pn->state == 0) {
+				xcb_get_property_cookie_t pc;
+				xcb_get_property_reply_t *pr;
+				xcb_get_atom_name_cookie_t ac;
+				xcb_get_atom_name_reply_t *ar;
+				ac = xcb_get_atom_name(srv->conn, pn->atom);
+				ar = xcb_get_atom_name_reply(srv->conn, ac, NULL);
+				pc = xcb_get_property(srv->conn, 0, pn->window, pn->atom,
+					XCB_ATOM_ANY, 0, 64);
+				pr = xcb_get_property_reply(srv->conn, pc, NULL);
+				weston_log("xim-server: SRVPROP name=%s type=0x%x fmt=%d len=%d\n",
+					ar ? xcb_get_atom_name_name(ar) : "?",
+					pr ? pr->type : 0, pr ? pr->format : 0,
+					pr ? xcb_get_property_value_length(pr) : 0);
+				if (ar) free(ar);
+				if (pr) free(pr);
+			}
 		}
 		if ((ev->response_type & ~0x80) == XCB_CLIENT_MESSAGE) {
 			xcb_client_message_event_t *cm =
