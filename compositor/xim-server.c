@@ -833,9 +833,19 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 	reply.data.data32[1] = 0;
 	reply.data.data32[2] = 2;
 	reply.data.data32[3] = 4;
-	xcb_send_event(srv->conn, 0, c->client_win, XCB_EVENT_MASK_NO_EVENT,
-		       (const char *)&reply);
-	xcb_send_event(srv->conn, 0, srv->screen->root,
+	{
+		static const uint32_t masks[] = {
+			XCB_EVENT_MASK_NO_EVENT, XCB_EVENT_MASK_KEY_PRESS,
+			XCB_EVENT_MASK_STRUCTURE_NOTIFY, XCB_EVENT_MASK_PROPERTY_CHANGE,
+			XCB_EVENT_MASK_FOCUS_CHANGE, 0xffffffffu };
+		unsigned mi;
+		for (mi = 0; mi < sizeof masks / sizeof masks[0]; mi++)
+			xcb_send_event(srv->conn, 0, c->client_win, masks[mi],
+				       (const char *)&reply);
+		for (mi = 0; mi < sizeof masks / sizeof masks[0]; mi++)
+			xcb_send_event(srv->conn, 0, srv->screen->root, masks[mi],
+				       (const char *)&reply);
+	}
 			       XCB_EVENT_MASK_NO_EVENT, (const char *)&reply);
 	xcb_flush(srv->conn);
 
