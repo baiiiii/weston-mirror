@@ -1195,7 +1195,7 @@ xim_server_init(struct weston_compositor *ec)
 	xcb_flush(srv->conn);
 
 	{
-	uint32_t evmask = XCB_EVENT_MASK_NO_EVENT;
+	uint32_t evmask = XCB_EVENT_MASK_PROPERTY_CHANGE;
 		xcb_change_window_attributes(srv->conn, srv->server_win,
 				   XCB_CW_EVENT_MASK, &evmask);
 	}
