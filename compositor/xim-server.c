@@ -1185,6 +1185,11 @@ xim_server_init(struct weston_compositor *ec)
 			  XCB_WINDOW_CLASS_INPUT_OUTPUT,
 			  srv->screen->root_visual, 0, NULL);
 
+	{
+		uint32_t ovr = 1;
+		xcb_change_window_attributes(srv->conn, srv->server_win,
+				   XCB_CW_OVERRIDE_REDIRECT, &ovr);
+	}
 	xcb_map_window(srv->conn, srv->server_win);
 	{
 		const char *nm = "WSLg XIM";
