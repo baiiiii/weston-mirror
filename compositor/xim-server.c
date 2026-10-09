@@ -810,6 +810,8 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 	if (!c) return;
 	c->srv = srv;
 	c->client_win = ev->data.data32[0];
+	if (c->client_win == XCB_WINDOW_NONE)
+		c->client_win = ev->window;
 	c->order = XIM_BIGENDIAN;
 	wl_list_init(&c->ics);
 	wl_list_insert(&srv->clients, &c->link);
