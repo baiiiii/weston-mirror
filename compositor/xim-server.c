@@ -837,6 +837,7 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 		       (const char *)&reply);
 	xcb_flush(srv->conn);
 
+	xcb_map_window(srv->conn, c->comm_win);
 	weston_log("xim-server: client 0x%x -> comm 0x%x\n",
 		   c->client_win, c->comm_win);
 }
