@@ -870,6 +870,8 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 			weston_log("xim-server: XCONNECT atom=0x%x\n",
 				   srv->a_xim_xconnect);
 			if (cm->type == srv->a_xim_xconnect) {
+				if (cm->window == srv->server_win)
+					continue;
 				xim_new_connection(srv, cm);
 			} else if (cm->type == srv->a_xim_protocol ||
 				   cm->type == srv->a_xim_moredata) {
