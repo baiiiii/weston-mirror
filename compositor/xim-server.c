@@ -831,8 +831,8 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 	reply.format = 32;
 	reply.data.data32[0] = c->comm_win;
 	reply.data.data32[1] = 0;
-	reply.data.data32[2] = 2;
-	reply.data.data32[3] = 4;
+	reply.data.data32[2] = 0;
+	reply.data.data32[3] = 0;
 	xcb_send_event(srv->conn, 0, c->client_win, XCB_EVENT_MASK_NO_EVENT,
 		       (const char *)&reply);
 	xcb_flush(srv->conn);
