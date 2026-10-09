@@ -802,9 +802,9 @@ xim_client_find(struct xim_server *srv, xcb_window_t comm_win)
 }
 
 static void
-	xim_mark("XIM-conn-enter");
 xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 {
+	xim_mark("XIM-conn-enter");
 	struct xim_client *c;
 	xcb_client_message_event_t reply;
 
