@@ -66,7 +66,7 @@
 
 #define XIM_STYLE_NOTHING		(0x0008u | 0x0400u)
 
-#define DEFAULT_SERVER_NAME		"@server=wslg-xim"
+#define DEFAULT_SERVER_NAME		"@server=wslgxim"
 #define XIM_PROTOCOL_MAJOR		1
 #define XIM_PROTOCOL_MINOR		0
 #define XIM_HEADER_SIZE			4
@@ -1193,7 +1193,7 @@ xim_server_init(struct weston_compositor *ec)
 	xcb_map_window(srv->conn, srv->server_win);
 	{
 		const char *nm = "WSLg XIM";
-		const char *cl = "wslg-xim\0wslg-xim";
+		const char *cl = "wslgxim\0wslgxim";
 		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
 				   srv->server_win, XCB_ATOM_WM_NAME,
 				   XCB_ATOM_STRING, 8, 8, nm);
