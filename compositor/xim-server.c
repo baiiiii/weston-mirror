@@ -1155,6 +1155,9 @@ xim_server_init(struct weston_compositor *ec)
 
 	xim_mark("XIM-e-before-create-window");
 	srv->server_win = xcb_generate_id(srv->conn);
+
+	xcb_map_window(srv->conn, srv->server_win);
+	xcb_flush(srv->conn);
 	xcb_create_window(srv->conn, XCB_COPY_FROM_PARENT, srv->server_win,
 			  srv->screen->root, 0, 0, 1, 1, 0,
 			  XCB_WINDOW_CLASS_INPUT_OUTPUT,
