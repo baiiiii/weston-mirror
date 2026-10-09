@@ -1165,6 +1165,11 @@ xim_server_init(struct weston_compositor *ec)
 			  srv->screen->root_visual, 0, NULL);
 
 	xcb_map_window(srv->conn, srv->server_win);
+	{
+		uint32_t ovr = 1;
+		xcb_change_window_attributes(srv->conn, srv->server_win,
+				   XCB_CW_OVERRIDE_REDIRECT, &ovr);
+	}
 	xcb_flush(srv->conn);
 
 	xim_mark("XIM-f-after-create-window");
