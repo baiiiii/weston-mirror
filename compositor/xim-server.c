@@ -1177,8 +1177,7 @@ xim_server_init(struct weston_compositor *ec)
 	srv->a_focus_window = xim_atom(srv, "focusWindow");
 
 	{
-		uint32_t evmask = XCB_EVENT_MASK_STRUCTURE_NOTIFY |
-			   XCB_EVENT_MASK_PROPERTY_CHANGE;
+	uint32_t evmask = XCB_EVENT_MASK_NO_EVENT;
 		xcb_change_window_attributes(srv->conn, srv->server_win,
 				   XCB_CW_EVENT_MASK, &evmask);
 	}
