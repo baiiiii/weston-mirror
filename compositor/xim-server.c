@@ -1186,6 +1186,16 @@ xim_server_init(struct weston_compositor *ec)
 			  srv->screen->root_visual, 0, NULL);
 
 	xcb_map_window(srv->conn, srv->server_win);
+	{
+		const char *nm = "WSLg XIM";
+		const char *cl = "wslg-xim\0wslg-xim";
+		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
+				   srv->server_win, XCB_ATOM_WM_NAME,
+				   XCB_ATOM_STRING, 8, 8, nm);
+		xcb_change_property(srv->conn, XCB_PROP_MODE_REPLACE,
+				   srv->server_win, XCB_ATOM_WM_CLASS,
+				   XCB_ATOM_STRING, 8, 18, cl);
+	}
 	xim_mark("XIM-f-after-create-window");
 	srv->a_xim_servers = xim_atom(srv, "XIM_SERVERS");
 	srv->a_xim_xconnect = xim_atom(srv, "_XIM_XCONNECT");
