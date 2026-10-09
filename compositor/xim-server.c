@@ -851,6 +851,12 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 	while ((ev = xcb_poll_for_event(srv->conn))) {
 		weston_log("xim-server: EVENT type=0x%x send_event=%d\n",
 			   ev->response_type, (ev->response_type & 0x80) ? 1 : 0);
+		if ((ev->response_type & ~0x80) == XCB_PROPERTY_NOTIFY) {
+			xcb_property_notify_event_t *pn =
+				(xcb_property_notify_event_t *)ev;
+			weston_log("xim-server: PROP atom=0x%x win=0x%x state=%d\n",
+				   pn->atom, pn->window, pn->state);
+		}
 		if ((ev->response_type & ~0x80) == XCB_CLIENT_MESSAGE) {
 			xcb_client_message_event_t *cm =
 				(xcb_client_message_event_t *)ev;
