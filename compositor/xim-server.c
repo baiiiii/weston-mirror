@@ -862,9 +862,11 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 		if ((ev->response_type & ~0x80) == XCB_CLIENT_MESSAGE) {
 			xcb_client_message_event_t *cm =
 				(xcb_client_message_event_t *)ev;
-			weston_log("xim-server: CM type=0x%x win=0x%x d0=0x%x d1=0x%x\n",
+			weston_log("xim-server: CM type=0x%x win=0x%x d0=0x%x d1=0x%x d2=0x%x d3=0x%x d4=0x%x fmt=%d\n",
 				   cm->type, cm->window,
-				   (unsigned)cm->data.data32[0], (unsigned)cm->data.data32[1]);
+				   (unsigned)cm->data.data32[0], (unsigned)cm->data.data32[1],
+				   (unsigned)cm->data.data32[2], (unsigned)cm->data.data32[3],
+				   (unsigned)cm->data.data32[4], cm->format);
 			weston_log("xim-server: XCONNECT atom=0x%x\n",
 				   srv->a_xim_xconnect);
 			if (cm->type == srv->a_xim_xconnect) {
