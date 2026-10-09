@@ -846,7 +846,6 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 			xcb_send_event(srv->conn, 0, srv->screen->root, masks[mi],
 				       (const char *)&reply);
 	}
-			       XCB_EVENT_MASK_NO_EVENT, (const char *)&reply);
 	xcb_flush(srv->conn);
 
 	xcb_map_window(srv->conn, c->comm_win);
