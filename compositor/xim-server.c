@@ -820,6 +820,9 @@ xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 			  XCB_WINDOW_CLASS_INPUT_OUTPUT,
 			  srv->screen->root_visual, 0, NULL);
 
+	xcb_map_window(srv->conn, srv->server_win);
+	xcb_flush(srv->conn);
+
 	memset(&reply, 0, sizeof reply);
 	reply.response_type = XCB_CLIENT_MESSAGE;
 	reply.window = c->client_win;
