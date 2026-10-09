@@ -802,6 +802,7 @@ xim_client_find(struct xim_server *srv, xcb_window_t comm_win)
 }
 
 static void
+	xim_mark("XIM-conn-enter");
 xim_new_connection(struct xim_server *srv, xcb_client_message_event_t *ev)
 {
 	struct xim_client *c;
@@ -856,6 +857,8 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 			weston_log("xim-server: CM type=0x%x win=0x%x d0=0x%x d1=0x%x\n",
 				   cm->type, cm->window,
 				   (unsigned)cm->data.data32[0], (unsigned)cm->data.data32[1]);
+			weston_log("xim-server: XCONNECT atom=0x%x\n",
+				   srv->a_xim_xconnect);
 			if (cm->type == srv->a_xim_xconnect) {
 				xim_new_connection(srv, cm);
 			} else if (cm->type == srv->a_xim_protocol ||
