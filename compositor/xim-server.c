@@ -14,7 +14,6 @@
 #include <unistd.h>
 
 #include <xcb/xcb.h>
-#include <xcb/xtest.h>
 
 #include <libweston/libweston.h>
 #include <libweston/plugin-registry.h>
@@ -760,13 +759,26 @@ xim_keycode(struct xim_server *srv)
 static void
 xim_wake_input(struct xim_server *srv)
 {
-	uint8_t kc = xim_keycode(srv);
+	struct weston_seat *seat;
+	struct weston_keyboard *kbd;
+	struct timespec ts;
+	uint32_t key = xim_keycode(srv);
 
-	xcb_test_fake_input(srv->conn, XCB_KEY_PRESS, kc, XCB_CURRENT_TIME,
-			    XCB_NONE, 0, 0, 0);
-	xcb_test_fake_input(srv->conn, XCB_KEY_RELEASE, kc, XCB_CURRENT_TIME,
-			    XCB_NONE, 0, 0, 0);
-	xcb_flush(srv->conn);
+	if (key < 8)
+		return;
+	key -= 8;
+
+	weston_compositor_get_time(&ts);
+	wl_list_for_each(seat, &srv->ec->seat_list, link) {
+		kbd = weston_seat_get_keyboard(seat);
+		if (!kbd)
+			continue;
+		weston_keyboard_send_key(kbd, &ts, key,
+					 WL_KEYBOARD_KEY_STATE_PRESSED);
+		weston_keyboard_send_key(kbd, &ts, key,
+					 WL_KEYBOARD_KEY_STATE_RELEASED);
+		break;
+	}
 }
 
 static void
