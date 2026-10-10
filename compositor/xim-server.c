@@ -76,7 +76,7 @@
 #define XimType_XIMStyles		10
 #define XimType_NEST			0x7fff
 
-#define XimLookupChars			0x0002
+#define XimLookupChars			1
 #define XimSYNCHRONUS			0x0001
 #define XIM_IMID_VALID			0x0001
 #define XIM_BadProtocol			13
@@ -805,10 +805,9 @@ xim_bridge_commit(const char *text, void *user_data)
 
 	len = strlen(text);
 	xb_init(&b, c->order);
-	xb_u16(&b, c->imid);
-	xb_u16(&b, ic->icid);
-	xb_u16(&b, XimLookupChars);
-	xb_u16(&b, (uint16_t)(len + (utf8 ? 3 : 0)));
+	xb_u32(&b, XimLookupChars);
+	xb_u32(&b, ic->icid);
+	xb_u32(&b, (uint32_t)(len + (utf8 ? 3 : 0)));
 	if (utf8)
 		xb_bytes(&b, "\033%G", 3);
 	xb_bytes(&b, text, len);
