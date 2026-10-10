@@ -76,7 +76,7 @@
 #define XimType_XIMStyles		10
 #define XimType_NEST			0x7fff
 
-#define XimLookupChars			1
+#define XimLookupChars			0x0002
 #define XimSYNCHRONUS			0x0001
 #define XIM_IMID_VALID			0x0001
 #define XIM_BadProtocol			13
