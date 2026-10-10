@@ -154,6 +154,8 @@ struct xim_ic {
 	bool preedit_active;
 	bool has_preedit_attrs;
 	uint32_t preedit_chars;
+	uint8_t *last_key;
+	size_t last_key_len;
 };
 
 struct xim_client {
@@ -755,6 +757,18 @@ xim_bridge_commit(const char *text, void *user_data)
 	xim_send(c, XIM_COMMIT, 0, &b);
 	free(b.data);
 
+	if (ic->last_key) {
+		xb_init(&b, c->order);
+		xb_bytes(&b, ic->last_key, ic->last_key_len);
+		xb_pad(&b);
+		xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+		free(b.data);
+
+		free(ic->last_key);
+		ic->last_key = NULL;
+		ic->last_key_len = 0;
+	}
+
 	weston_log("xim-server: committed %zu bytes to ic %u\n", len, ic->icid);
 }
 
@@ -1068,6 +1082,16 @@ xim_on_create_ic(struct xim_client *c, const uint8_t *body, size_t len)
 }
 
 static void
+xim_ic_free(struct xim_ic *ic)
+{
+	if (!ic)
+		return;
+
+	free(ic->last_key);
+	free(ic);
+}
+
+static void
 xim_on_destroy_ic(struct xim_client *c, const uint8_t *body, size_t len)
 {
 	struct xbuf b;
@@ -1079,7 +1103,7 @@ xim_on_destroy_ic(struct xim_client *c, const uint8_t *body, size_t len)
 		if (c->focus_ic == ic)
 			c->focus_ic = NULL;
 		wl_list_remove(&ic->link);
-		free(ic);
+		xim_ic_free(ic);
 		xim_report_focus(c->srv);
 	}
 
@@ -1174,10 +1198,28 @@ static void
 xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 {
 	struct xbuf b;
+	struct xim_ic *ic;
 
 	if (len < 40) {
 		xim_on_unhandled(c, XIM_FORWARD_EVENT, body, len);
 		return;
+	}
+
+	if (len >= 4) {
+		ic = xim_ic_find(c, rd16(body + 2, c->order));
+		if (ic) {
+			free(ic->last_key);
+			ic->last_key = malloc(len);
+			if (ic->last_key) {
+				memcpy(ic->last_key, body, len);
+				ic->last_key_len = len;
+			} else {
+				ic->last_key_len = 0;
+			}
+
+			if (ic->preedit_active)
+				return;
+		}
 	}
 
 	xb_init(&b, c->order);
@@ -1339,7 +1381,7 @@ xim_client_reset(struct xim_client *c)
 
 	wl_list_for_each_safe(ic, tmp, &c->ics, link) {
 		wl_list_remove(&ic->link);
-		free(ic);
+		xim_ic_free(ic);
 	}
 	c->rx_len = 0;
 	c->order_known = false;
@@ -1523,7 +1565,7 @@ xim_client_gone(struct xim_server *srv, xcb_window_t win)
 
 		wl_list_for_each_safe(ic, ictmp, &c->ics, link) {
 			wl_list_remove(&ic->link);
-			free(ic);
+			xim_ic_free(ic);
 		}
 		if (c->comm_win)
 			xcb_destroy_window(srv->conn, c->comm_win);
@@ -1547,7 +1589,7 @@ xim_free_clients(struct xim_server *srv)
 
 		wl_list_for_each_safe(ic, ictmp, &c->ics, link) {
 			wl_list_remove(&ic->link);
-			free(ic);
+			xim_ic_free(ic);
 		}
 		wl_list_remove(&c->link);
 		free(c->rx);
