@@ -422,7 +422,6 @@ xim_send(struct xim_client *c, uint8_t major, uint8_t minor,
 	if (!pkt)
 		return;
 
-	{
 	pkt[0] = major;
 	pkt[1] = minor;
 	wr16(pkt + 2, (uint16_t)(blen / 4), c->order);
