@@ -377,27 +377,13 @@ xb_attr_value(struct xbuf *b, uint16_t id, const void *value, size_t len)
 	xb_zero(b, XIM_PAD(len));
 }
 
+static void
 xim_send_packet(struct xim_client *c, const uint8_t *pkt, size_t len)
 {
-	xcb_client_message_event_t ev;
 	size_t off;
 
-	xcb_change_property(c->srv->conn, XCB_PROP_MODE_REPLACE,
-			    c->client_win, c->srv->a_xim_protocol,
-			    XCB_ATOM_STRING, 8, len, pkt);
-
-	memset(&ev, 0, sizeof ev);
-	ev.response_type = XCB_CLIENT_MESSAGE;
-	ev.window = c->client_win;
-	ev.type = c->srv->a_xim_protocol;
-	ev.format = 32;
-	ev.data.data32[0] = (uint32_t)len;
-	ev.data.data32[1] = c->srv->a_xim_protocol;
-
-	xcb_send_event(c->srv->conn, 0, c->client_win,
-		       XCB_EVENT_MASK_NO_EVENT, (const char *)&ev);
-
 	for (off = 0; off < len; off += XIM_CM_DATA_SIZE) {
+		xcb_client_message_event_t ev;
 		size_t left = len - off;
 		bool last = left <= XIM_CM_DATA_SIZE;
 
