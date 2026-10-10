@@ -825,12 +825,13 @@ xim_bridge_commit(const char *text, void *user_data)
 	xim_send(c, XIM_COMMIT, 0, &b);
 	free(b.data);
 
-	#if 0
 	if (ic->last_key) {
 		xb_init(&b, c->order);
 		xb_bytes(&b, ic->last_key, ic->last_key_len);
 		xb_pad(&b);
+			#if 0
 		xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+			#endif
 		free(b.data);
 
 		free(ic->last_key);
@@ -1351,7 +1352,9 @@ xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_init(&b, c->order);
 	xb_bytes(&b, body, len);
 	xb_pad(&b);
+			#if 0
 	xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+			#endif
 	free(b.data);
 }
 
