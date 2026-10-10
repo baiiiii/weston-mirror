@@ -829,7 +829,9 @@ xim_bridge_commit(const char *text, void *user_data)
 		xb_init(&b, c->order);
 		xb_bytes(&b, ic->last_key, ic->last_key_len);
 		xb_pad(&b);
-			/* disabled for now */
+			#if 0
+		xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+			#endif
 		free(b.data);
 
 		free(ic->last_key);
@@ -1350,7 +1352,9 @@ xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_init(&b, c->order);
 	xb_bytes(&b, body, len);
 	xb_pad(&b);
-			/* disabled for now */
+			#if 0
+	xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+			#endif
 	free(b.data);
 }
 
@@ -1780,17 +1784,18 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 				if (!c)
 					break;
 
-				{
-					char rh[80];
-					size_t ri;
-					rh[0] = 0;
-					for (ri = 0; ri < 20; ri++)
-						snprintf(rh + ri * 3, 4, "%02x ", (unsigned char)cm->data.data8[ri]);
-					weston_log("xim-server: RX [%s]\n", rh);
-				}
 				if (cm->format == 8)
 					xim_client_feed(c, cm->data.data8,
 				{
+					char rh[200];
+					size_t ri;
+					rh[0] = 0;
+					for (ri = 0; ri < 20 && ri < (size_t)cm->data.data32[0]; ri++)
+						snprintf(rh + ri * 3, 4, "%02x ", cm->data.data8[ri]);
+					weston_log("xim-server: RX [%s]\n", rh);
+				}
+							XIM_CM_DATA_SIZE);
+				else if (cm->format == 32)
 					xim_read_property(c, cm->window,
 							  cm->data.data32[1]);
 			}
