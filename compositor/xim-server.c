@@ -422,6 +422,16 @@ xim_send(struct xim_client *c, uint8_t major, uint8_t minor,
 	if (!pkt)
 		return;
 
+	{
+		char hx[200];
+		size_t hi;
+		size_t lim = total < 32 ? total : 32;
+		hx[0] = 0;
+		for (hi = 0; hi < lim; hi++)
+			snprintf(hx + hi * 3, 4, "%02x ", pkt[hi]);
+		weston_log("xim-server: TX major=%u len=%zu [%s]\n",
+			   major, total, hx);
+	}
 	pkt[0] = major;
 	pkt[1] = minor;
 	wr16(pkt + 2, (uint16_t)(blen / 4), c->order);
