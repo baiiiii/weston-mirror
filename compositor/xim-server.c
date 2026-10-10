@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include <xcb/xcb.h>
+#include <xcb/xtest.h>
 
 #include <libweston/libweston.h>
 #include <libweston/plugin-registry.h>
@@ -757,36 +758,15 @@ xim_keycode(struct xim_server *srv)
 }
 
 static void
-xim_send_wake_key(struct xim_client *c, struct xim_ic *ic)
+xim_wake_input(struct xim_server *srv)
 {
-	struct xbuf b;
-	uint32_t win = ic->client_win;
-	uint16_t zero = 0, one = 1;
-	uint8_t type = XCB_KEY_PRESS, same = 1, pad = 0;
-	uint8_t kc = xim_keycode(c->srv);
+	uint8_t kc = xim_keycode(srv);
 
-	xb_init(&b, c->order);
-	xb_u16(&b, c->imid);
-	xb_u16(&b, ic->icid);
-	xb_u16(&b, 0);
-	xb_u16(&b, one);
-	xb_bytes(&b, &type, 1);
-	xb_bytes(&b, &kc, 1);
-	xb_u16(&b, one);
-	xb_u32(&b, 0);
-	xb_u32(&b, win);
-	xb_u32(&b, win);
-	xb_u32(&b, 0);
-	xb_u16(&b, zero);
-	xb_u16(&b, zero);
-	xb_u16(&b, zero);
-	xb_u16(&b, zero);
-	xb_u16(&b, zero);
-	xb_bytes(&b, &same, 1);
-	xb_bytes(&b, &pad, 1);
-	xb_pad(&b);
-	xim_send(c, XIM_FORWARD_EVENT, 0, &b);
-	free(b.data);
+	xcb_test_fake_input(srv->conn, XCB_KEY_PRESS, kc, XCB_CURRENT_TIME,
+			    XCB_NONE, 0, 0, 0);
+	xcb_test_fake_input(srv->conn, XCB_KEY_RELEASE, kc, XCB_CURRENT_TIME,
+			    XCB_NONE, 0, 0, 0);
+	xcb_flush(srv->conn);
 }
 
 static void
@@ -835,8 +815,8 @@ xim_bridge_commit(const char *text, void *user_data)
 		ic->last_key = NULL;
 		ic->last_key_len = 0;
 	} else {
-		xim_send_wake_key(c, ic);
-		weston_log("xim-server: wake key after commit to ic %u\n",
+		xim_wake_input(c->srv);
+		weston_log("xim-server: wake input after commit to ic %u\n",
 			   ic->icid);
 	}
 
