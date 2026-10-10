@@ -178,6 +178,8 @@ struct xim_server {
 	const struct weston_text_input_bridge_api *bridge;
 	xcb_connection_t *conn;
 	struct wl_event_source *xcb_source;
+	struct wl_event_source *test_source;
+	char *test_last;
 	struct wl_event_source *efd_source;
 	int efd;
 	struct wl_listener destroy_listener;
@@ -185,6 +187,7 @@ struct xim_server {
 	xcb_window_t server_win;
 	xcb_atom_t a_xim_servers, a_xim_xconnect, a_xim_protocol, a_xim_moredata;
 	xcb_atom_t a_locales, a_transport, a_server;
+	xcb_atom_t a_test;
 	char *name;
 	struct wl_list clients;
 	uint16_t next_imid, next_icid;
@@ -833,9 +836,63 @@ xim_bridge_commit(const char *text, void *user_data)
 		ic->last_key_len = 0;
 	} else {
 		xim_send_wake_key(c, ic);
+		weston_log("xim-server: wake key after commit to ic %u\n",
+			   ic->icid);
 	}
 
 	weston_log("xim-server: committed %zu bytes to ic %u\n", len, ic->icid);
+}
+
+static int
+xim_test_tick(void *data)
+{
+	struct xim_server *srv = data;
+	xcb_get_property_cookie_t ck;
+	xcb_get_property_reply_t *rep;
+	char buf[256], *text = NULL;
+	int vlen;
+
+	wl_event_source_timer_update(srv->test_source, 200);
+
+	if (!srv->a_test)
+		srv->a_test = xim_atom(srv, "WSLGXIM_TEST_COMMIT");
+	if (!srv->a_test)
+		return 0;
+
+	ck = xcb_get_property(srv->conn, 1, srv->screen->root, srv->a_test,
+			      XCB_GET_PROPERTY_TYPE_ANY, 0, sizeof(buf) / 4);
+	rep = xcb_get_property_reply(srv->conn, ck, NULL);
+	if (!rep)
+		return 0;
+
+	vlen = xcb_get_property_value_length(rep);
+	if (vlen > 0) {
+		if ((size_t)vlen >= sizeof(buf))
+			vlen = (int)sizeof(buf) - 1;
+		memcpy(buf, xcb_get_property_value(rep), (size_t)vlen);
+		buf[vlen] = '\0';
+		if (buf[0])
+			text = buf;
+	}
+	free(rep);
+
+	if (!text) {
+		free(srv->test_last);
+		srv->test_last = NULL;
+		return 0;
+	}
+	if (srv->test_last && !strcmp(srv->test_last, text))
+		return 0;
+
+	free(srv->test_last);
+	srv->test_last = strdup(text);
+	if (!srv->test_last)
+		return 0;
+
+	weston_log("xim-server: test commit \"%s\"\n", srv->test_last);
+	xim_bridge_commit(srv->test_last, srv);
+
+	return 0;
 }
 
 static void
@@ -1334,8 +1391,14 @@ xim_on_unhandled(struct xim_client *c, uint8_t major, const uint8_t *body,
 	struct xbuf b;
 	uint16_t imid = (len >= 2) ? rd16(body, c->order) : 0;
 
-	if (major == 0 || major == XIM_ERROR)
+	if (major == 0)
 		return;
+
+	if (major == XIM_ERROR) {
+		weston_log("xim-server: XIM_ERROR from client 0x%x\n",
+			   c->client_win);
+		return;
+	}
 
 	xb_init(&b, c->order);
 	xb_u16(&b, imid);
@@ -2034,6 +2097,11 @@ xim_server_init(struct weston_compositor *ec)
 			srv->conn = NULL;
 			return 0;
 		}
+
+		srv->test_source = wl_event_loop_add_timer(loop, xim_test_tick,
+							   srv);
+		if (srv->test_source)
+			wl_event_source_timer_update(srv->test_source, 200);
 	}
 
 	if (!srv->listener_attached) {
