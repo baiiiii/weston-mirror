@@ -1387,6 +1387,11 @@ xim_on_unhandled(struct xim_client *c, uint8_t major, const uint8_t *body,
 
 	if (major == XIM_ERROR) {
 		weston_log("xim-server: XIM_ERROR from client 0x%x\n",
+		weston_log("xim-server:   imid=%u icid=%u flag=0x%x code=%u\n",
+			(len >= 4) ? rd32(body, c->order) : 0,
+			(len >= 6) ? rd16(body + 4, c->order) : 0,
+			(len >= 8) ? rd16(body + 6, c->order) : 0,
+			(len >= 10) ? rd16(body + 8, c->order) : 0);
 			   c->client_win);
 		return;
 	}
