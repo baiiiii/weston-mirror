@@ -825,6 +825,7 @@ xim_bridge_commit(const char *text, void *user_data)
 	xim_send(c, XIM_COMMIT, 0, &b);
 	free(b.data);
 
+	#if 0
 	if (ic->last_key) {
 		xb_init(&b, c->order);
 		xb_bytes(&b, ic->last_key, ic->last_key_len);
@@ -1340,6 +1341,7 @@ xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 			} else {
 				ic->last_key_len = 0;
 			}
+	#endif
 
 			if (ic->preedit_active)
 				return;
