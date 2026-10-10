@@ -703,7 +703,7 @@ xim_bridge_preedit(const char *text, int32_t cursor_begin, int32_t cursor_end,
 		ic->preedit_chars = 0;
 	}
 
-	utf8 = xim_needs_ct_utf8(text);
+	utf8 = false;
 	len = strlen(text);
 	str_len = (uint16_t)(len + (utf8 ? 3 : 0));
 
@@ -811,7 +811,7 @@ xim_bridge_commit(const char *text, void *user_data)
 
 	xim_preedit_done(ic);
 
-	utf8 = xim_needs_ct_utf8(text);
+	utf8 = false;
 
 	len = strlen(text);
 	xb_init(&b, c->order);
