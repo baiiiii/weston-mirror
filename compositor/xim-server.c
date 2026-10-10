@@ -188,6 +188,7 @@ struct xim_server {
 	char *name;
 	struct wl_list clients;
 	uint16_t next_imid, next_icid;
+	uint8_t min_keycode, max_keycode;
 	bool connected;
 	bool listener_attached;
 };
@@ -722,6 +723,69 @@ xim_bridge_preedit(const char *text, int32_t cursor_begin, int32_t cursor_end,
 		   text, chars, ic->icid);
 }
 
+static uint8_t
+xim_keycode(struct xim_server *srv)
+{
+	xcb_get_keyboard_mapping_cookie_t ck;
+	xcb_get_keyboard_mapping_reply_t *rep;
+	const xcb_keysym_t *syms;
+	uint32_t count, i;
+	uint8_t kc = srv->min_keycode;
+
+	if (srv->max_keycode <= srv->min_keycode)
+		return kc;
+
+	count = (uint32_t)(srv->max_keycode - srv->min_keycode + 1);
+	ck = xcb_get_keyboard_mapping(srv->conn, srv->min_keycode,
+				      (uint8_t)count);
+	rep = xcb_get_keyboard_mapping_reply(srv->conn, ck, NULL);
+	if (!rep)
+		return kc;
+
+	syms = xcb_get_keyboard_mapping_keysyms(rep);
+	for (i = 0; i < count; i++) {
+		if (syms[i * rep->keysyms_per_keycode]) {
+			kc = (uint8_t)(srv->min_keycode + i);
+			break;
+		}
+	}
+	free(rep);
+	return kc;
+}
+
+static void
+xim_send_wake_key(struct xim_client *c, struct xim_ic *ic)
+{
+	struct xbuf b;
+	uint32_t win = ic->client_win;
+	uint16_t zero = 0, one = 1;
+	uint8_t type = XCB_KEY_PRESS, same = 1, pad = 0;
+	uint8_t kc = xim_keycode(c->srv);
+
+	xb_init(&b, c->order);
+	xb_u16(&b, c->imid);
+	xb_u16(&b, ic->icid);
+	xb_u16(&b, 0);
+	xb_u16(&b, one);
+	xb_bytes(&b, &type, 1);
+	xb_bytes(&b, &kc, 1);
+	xb_u16(&b, one);
+	xb_u32(&b, 0);
+	xb_u32(&b, win);
+	xb_u32(&b, win);
+	xb_u32(&b, 0);
+	xb_u16(&b, zero);
+	xb_u16(&b, zero);
+	xb_u16(&b, zero);
+	xb_u16(&b, zero);
+	xb_u16(&b, zero);
+	xb_bytes(&b, &same, 1);
+	xb_bytes(&b, &pad, 1);
+	xb_pad(&b);
+	xim_send(c, XIM_FORWARD_EVENT, 0, &b);
+	free(b.data);
+}
+
 static void
 xim_bridge_commit(const char *text, void *user_data)
 {
@@ -767,6 +831,8 @@ xim_bridge_commit(const char *text, void *user_data)
 		free(ic->last_key);
 		ic->last_key = NULL;
 		ic->last_key_len = 0;
+	} else {
+		xim_send_wake_key(c, ic);
 	}
 
 	weston_log("xim-server: committed %zu bytes to ic %u\n", len, ic->icid);
@@ -1928,6 +1994,8 @@ xim_server_init(struct weston_compositor *ec)
 		return 0;
 	}
 	srv->screen = it.data;
+	srv->min_keycode = setup->min_keycode;
+	srv->max_keycode = setup->max_keycode;
 
 	srv->server_win = xcb_generate_id(srv->conn);
 	xcb_create_window(srv->conn, XCB_COPY_FROM_PARENT, srv->server_win,
