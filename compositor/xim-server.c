@@ -1947,6 +1947,16 @@ xim_compositor_destroy(struct wl_listener *listener, void *data)
 }
 
 static int
+xim_retry_tick(void *data)
+{
+	struct xim_server *srv = data;
+
+	if (!srv->connected)
+		xim_server_init(srv->ec);
+	return 0;
+}
+
+static int
 xim_efd_cb(int fd, uint32_t mask, void *data)
 {
 	struct xim_server *srv = data;
@@ -1987,6 +1997,14 @@ xim_server_init(struct weston_compositor *ec)
 
 	if (srv && srv->connected)
 		return 0;
+
+	loop = wl_display_get_event_loop(ec->wl_display);
+	if (loop && !srv->test_source) {
+		srv->test_source = wl_event_loop_add_timer(loop,
+			xim_retry_tick, srv);
+		if (srv->test_source)
+			wl_event_source_timer_update(srv->test_source, 200);
+	}
 
 	if (!srv) {
 		srv = zalloc(sizeof *srv);
