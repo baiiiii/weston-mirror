@@ -1999,19 +1999,20 @@ xim_server_init(struct weston_compositor *ec)
 		return 0;
 
 	loop = wl_display_get_event_loop(ec->wl_display);
-	if (loop && !srv->test_source) {
-		srv->test_source = wl_event_loop_add_timer(loop,
-			xim_retry_tick, srv);
-		if (srv->test_source)
-			wl_event_source_timer_update(srv->test_source, 200);
-	}
-
 	if (!srv) {
 		srv = zalloc(sizeof *srv);
 		if (!srv)
 			return -1;
 
 		srv->ec = ec;
+
+	loop = wl_display_get_event_loop(ec->wl_display);
+	if (loop && !srv->test_source) {
+		srv->test_source = wl_event_loop_add_timer(loop,
+			xim_retry_tick, srv);
+		if (srv->test_source)
+			wl_event_source_timer_update(srv->test_source, 200);
+	}
 		srv->efd = -1;
 		wl_list_init(&srv->clients);
 		srv->next_imid = 1;
