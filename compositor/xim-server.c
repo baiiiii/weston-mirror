@@ -731,6 +731,7 @@ xim_bridge_preedit(const char *text, int32_t cursor_begin, int32_t cursor_end,
 	xb_pad(&b);
 	xb_u16(&b, (uint16_t)(4 * chars));
 	xb_u16(&b, (uint16_t)chars);
+	for (i = 0; i < chars; i++)
 		xb_u32(&b, XIM_FEEDBACK_UNDERLINE);
 	xim_send(c, XIM_PREEDIT_DRAW, 0, &b);
 	free(b.data);
