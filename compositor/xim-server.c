@@ -106,6 +106,11 @@ static const uint32_t xim_advertised_styles[] = {
 	XIM_STYLE_NOTHING,
 };
 
+#define XimType_CARD16			2
+#define XimType_CARD32			3
+#define XimType_STRING8		4
+#define XimType_XIMStyles		10
+
 #define XIM_FEEDBACK_UNDERLINE		0x00000002
 
 #define XIM_IM_ATTR_QUERY_INPUT_STYLE	0
@@ -374,9 +379,11 @@ xb_imattr(struct xbuf *b, uint16_t id, uint16_t type, const char *name)
 }
 
 static void
-xb_attr_value(struct xbuf *b, uint16_t id, const void *value, size_t len)
+xb_attr_value(struct xbuf *b, uint16_t id, uint16_t type,
+		      const void *value, size_t len)
 {
 	xb_u16(b, id);
+	xb_u16(b, type);
 	xb_u16(b, (uint16_t)len);
 	xb_bytes(b, value, len);
 	xb_zero(b, XIM_PAD(len));
@@ -1134,7 +1141,7 @@ xim_on_get_im_values(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_init(&b, c->order);
 	xb_u16(&b, imid);
 	xb_u16(&b, (uint16_t)(sizeof value + 4));
-	xb_attr_value(&b, XIM_IM_ATTR_QUERY_INPUT_STYLE, value, sizeof value);
+	xb_attr_value(&b, XIM_IM_ATTR_QUERY_INPUT_STYLE, XimType_XIMStyles, value, sizeof value);
 	xim_send(c, XIM_GET_IM_VALUES_REPLY, 0, &b);
 	free(b.data);
 }
@@ -1287,8 +1294,8 @@ xim_on_get_ic_values(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_u16(&b, icid);
 	xb_u16(&b, 16);
 	xb_u16(&b, 0);
-	xb_attr_value(&b, XIM_IC_ATTR_INPUT_STYLE, value, 4);
-	xb_attr_value(&b, XIM_IC_ATTR_FILTER_EVENTS, value + 4, 4);
+	xb_attr_value(&b, XIM_IC_ATTR_INPUT_STYLE, XimType_CARD32, value, 4);
+	xb_attr_value(&b, XIM_IC_ATTR_FILTER_EVENTS, XimType_CARD32, value + 4, 4);
 	xim_send(c, XIM_GET_IC_VALUES_REPLY, 0, &b);
 	free(b.data);
 }
