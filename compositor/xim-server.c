@@ -1325,7 +1325,7 @@ xim_on_forward_event(struct xim_client *c, const uint8_t *body, size_t len)
 	struct xim_ic *ic;
 
 	if (len < 40) {
-		xim_on_unhandled(c, XIM_FORWARD_EVENT, body, len);
+		weston_log("xim-server: short forward event (%zu bytes), ignored\n", len);
 		return;
 	}
 
