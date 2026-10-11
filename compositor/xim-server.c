@@ -919,6 +919,7 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 			   off, len, rd16(p + off, c->order),
 			   rd16(p + off + 2, c->order), rd16(p + off + 4, c->order),
 			   (off + 8 <= len) ? rd16(p + off + 6, c->order) : 0);
+		uint16_t id = rd16(p + off, c->order);
 		uint16_t alen = rd16(p + off + 4, c->order);
 		const uint8_t *val = p + off + 6;
 
