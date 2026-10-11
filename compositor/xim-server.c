@@ -729,7 +729,7 @@ xim_bridge_preedit(const char *text, int32_t cursor_begin, int32_t cursor_end,
 		xb_bytes(&b, "\033%G", 3);
 	xb_bytes(&b, text, len);
 	xb_pad(&b);
-	xb_u16(&b, (uint16_t)(4 * chars));
+	xb_u16(&b, 0);
 	xb_u16(&b, 0);
 	for (i = 0; i < chars; i++)
 		xb_u32(&b, XIM_FEEDBACK_UNDERLINE);
