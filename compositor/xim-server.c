@@ -386,7 +386,7 @@ xb_attr_value(struct xbuf *b, uint16_t id, uint16_t type,
 	xb_u16(b, type);
 	xb_u16(b, (uint16_t)len);
 	xb_bytes(b, value, len);
-	xb_zero(b, XIM_PAD(len));
+	xb_zero(b, XIM_PAD(len + 6));
 }
 
 static void
