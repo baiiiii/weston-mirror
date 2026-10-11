@@ -372,21 +372,18 @@ xb_imattr(struct xbuf *b, uint16_t id, uint16_t type, const char *name)
 	size_t n = strlen(name);
 
 	xb_u16(b, id);
-	xb_u16(b, type);
 	xb_u16(b, (uint16_t)n);
 	xb_bytes(b, name, n);
 	xb_zero(b, XIM_PAD(n + 2));
 }
 
 static void
-xb_attr_value(struct xbuf *b, uint16_t id, uint16_t type,
-		      const void *value, size_t len)
+xb_attr_value(struct xbuf *b, uint16_t id, const void *value, size_t len)
 {
 	xb_u16(b, id);
-	xb_u16(b, type);
 	xb_u16(b, (uint16_t)len);
 	xb_bytes(b, value, len);
-	xb_zero(b, XIM_PAD(len + 6));
+	xb_zero(b, XIM_PAD(len));
 }
 
 static void
@@ -827,7 +824,7 @@ xim_bridge_commit(const char *text, void *user_data)
 
 	len = strlen(text);
 	xb_init(&b, c->order);
-	xb_u32(&b, XimLookupChars);
+	xb_u32(&b, XimSYNCHRONUS | XimLookupChars);
 	xb_u32(&b, ic->icid);
 	xb_u32(&b, (uint32_t)(len + (utf8 ? 3 : 0)));
 	if (utf8)
@@ -914,16 +911,16 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 {
 	size_t off = 0;
 
-	while (off + 6 <= len) {
+	while (off + 4 <= len) {
 		weston_log("xim-server: PARSE off=%zu len=%zu id=%u f2=%u f4=%u f6=%u\n",
 			   off, len, rd16(p + off, c->order),
 			   rd16(p + off + 2, c->order), rd16(p + off + 4, c->order),
 			   (off + 8 <= len) ? rd16(p + off + 6, c->order) : 0);
 		uint16_t id = rd16(p + off, c->order);
-		uint16_t alen = rd16(p + off + 4, c->order);
-		const uint8_t *val = p + off + 6;
+		uint16_t alen = rd16(p + off + 2, c->order);
+		const uint8_t *val = p + off + 4;
 
-		if (off + 6 + alen > len)
+		if (off + 4 + alen > len)
 			break;
 		if (id == XIM_IC_ATTR_INPUT_STYLE && alen >= 4 &&
 		    ic->input_style == XIM_STYLE_NOTHING)
@@ -938,7 +935,7 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 				   alen);
 		}
 
-		off += 6 + alen + XIM_PAD(alen);
+		off += 4 + alen + XIM_PAD(alen);
 	}
 }
 
@@ -1003,7 +1000,7 @@ xim_on_open(struct xim_client *c, const uint8_t *body, size_t len)
 		struct xbuf ic;
 
 		xb_init(&ic, c->order);
-		xb_imattr(&ic, XIM_IC_ATTR_INPUT_STYLE, XimType_CARD32,
+		xb_imattr(&ic, XIM_IC_ATTR_INPUT_STYLE,
 			  "inputStyle");
 		xb_imattr(&ic, XIM_IC_ATTR_CLIENT_WINDOW, XimType_Window,
 			  "clientWindow");
@@ -1016,7 +1013,7 @@ xim_on_open(struct xim_client *c, const uint8_t *body, size_t len)
 		xb_imattr(&ic, XIM_IC_ATTR_SEPARATOR,
 			  XimType_SeparatorOfNestedList,
 			  "separatorofNestedList");
-		xb_imattr(&ic, XIM_IC_ATTR_FILTER_EVENTS, XimType_CARD32,
+		xb_imattr(&ic, XIM_IC_ATTR_FILTER_EVENTS,
 			  "filterEvents");
 		xb_u16(&b, (uint16_t)ic.len);
 		xb_u16(&b, 0);
@@ -1144,7 +1141,7 @@ xim_on_get_im_values(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_init(&b, c->order);
 	xb_u16(&b, imid);
 	xb_u16(&b, (uint16_t)(sizeof value + 4));
-	xb_attr_value(&b, XIM_IM_ATTR_QUERY_INPUT_STYLE, XimType_XIMStyles, value, sizeof value);
+	xb_attr_value(&b, XIM_IM_ATTR_QUERY_INPUT_STYLE, value, sizeof value);
 	xim_send(c, XIM_GET_IM_VALUES_REPLY, 0, &b);
 	free(b.data);
 }
@@ -1213,7 +1210,7 @@ xim_on_create_ic(struct xim_client *c, const uint8_t *body, size_t len)
 				break;
 			o += (size_t)snprintf(ids + o, sizeof ids - o, "%s%u/%u",
 					      n ? "," : "", id, alen);
-			off += 6 + alen + XIM_PAD(alen);
+			off += 4 + alen + XIM_PAD(alen);
 			n++;
 		}
 		weston_log("xim-server: CREATE_IC attrs [%s]\n", ids);
@@ -1299,8 +1296,8 @@ xim_on_get_ic_values(struct xim_client *c, const uint8_t *body, size_t len)
 	xb_u16(&b, icid);
 	xb_u16(&b, 16);
 	xb_u16(&b, 0);
-	xb_attr_value(&b, XIM_IC_ATTR_INPUT_STYLE, XimType_CARD32, value, 4);
-	xb_attr_value(&b, XIM_IC_ATTR_FILTER_EVENTS, XimType_CARD32, value + 4, 4);
+	xb_attr_value(&b, XIM_IC_ATTR_INPUT_STYLE, value, 4);
+	xb_attr_value(&b, XIM_IC_ATTR_FILTER_EVENTS, value + 4, 4);
 	xim_send(c, XIM_GET_IC_VALUES_REPLY, 0, &b);
 	free(b.data);
 }
