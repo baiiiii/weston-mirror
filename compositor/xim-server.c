@@ -1234,8 +1234,6 @@ xim_on_destroy_ic(struct xim_client *c, const uint8_t *body, size_t len)
 	uint16_t imid = (len >= 2) ? rd16(body, c->order) : c->imid;
 	uint16_t icid = (len >= 4) ? rd16(body + 2, c->order) : 0;
 	struct xim_ic *ic = xim_ic_find(c, icid);
-	weston_log("xim-server: GET_IC_VALUES imid=%u icid=%u len=%zu found=%d\n",
-		   imid, icid, len, ic ? 1 : 0);
 
 	if (ic) {
 		if (c->focus_ic == ic)
@@ -1287,6 +1285,8 @@ xim_on_get_ic_values(struct xim_client *c, const uint8_t *body, size_t len)
 	uint16_t imid = (len >= 2) ? rd16(body, c->order) : c->imid;
 	uint16_t icid = (len >= 4) ? rd16(body + 2, c->order) : 0;
 	struct xim_ic *ic = xim_ic_find(c, icid);
+	weston_log("xim-server: GET_IC_VALUES imid=%u icid=%u len=%zu found=%d\n",
+		   imid, icid, len, ic ? 1 : 0);
 
 	wr32(value, ic ? ic->input_style : XIM_STYLE_NOTHING, c->order);
 	wr32(value + 4, XCB_EVENT_MASK_KEY_PRESS, c->order);
