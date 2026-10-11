@@ -1000,7 +1000,7 @@ xim_on_open(struct xim_client *c, const uint8_t *body, size_t len)
 		struct xbuf ic;
 
 		xb_init(&ic, c->order);
-		xb_imattr(&ic, XIM_IC_ATTR_INPUT_STYLE,
+		xb_imattr(&ic, XIM_IC_ATTR_INPUT_STYLE, XimType_CARD32,
 			  "inputStyle");
 		xb_imattr(&ic, XIM_IC_ATTR_CLIENT_WINDOW, XimType_Window,
 			  "clientWindow");
@@ -1013,7 +1013,7 @@ xim_on_open(struct xim_client *c, const uint8_t *body, size_t len)
 		xb_imattr(&ic, XIM_IC_ATTR_SEPARATOR,
 			  XimType_SeparatorOfNestedList,
 			  "separatorofNestedList");
-		xb_imattr(&ic, XIM_IC_ATTR_FILTER_EVENTS,
+		xb_imattr(&ic, XIM_IC_ATTR_FILTER_EVENTS, XimType_CARD32,
 			  "filterEvents");
 		xb_u16(&b, (uint16_t)ic.len);
 		xb_u16(&b, 0);
