@@ -915,16 +915,14 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 	size_t off = 0;
 
 	while (off + 6 <= len) {
+		weston_log("xim-server: PARSE off=%zu len=%zu avail=%zu\n",
+			   off, len, len);
 		uint16_t id = rd16(p + off, c->order);
 		uint16_t alen = rd16(p + off + 4, c->order);
 		const uint8_t *val = p + off + 6;
 
 		if (off + 6 + alen > len)
 			break;
-		weston_log("xim-server: PARSE id=%u type=0x%x len=%u val0=%02x %02x %02x %02x\n",
-			   id, rd16(p + off + 2, c->order), alen,
-			   val[0], val[1], val[2], val[3]);
-
 		if (id == XIM_IC_ATTR_INPUT_STYLE && alen >= 4 &&
 		    ic->input_style == XIM_STYLE_NOTHING)
 			ic->input_style = rd32(val, c->order);
