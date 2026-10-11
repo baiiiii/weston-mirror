@@ -57,7 +57,7 @@
 #define XIM_FORWARD_EVENT		60
 #define XIM_SYNC			61
 #define XIM_SYNC_REPLY			62
-#define XIM_COMMIT			63
+#define XIM_COMMIT			64
 #define XIM_RESET_IC			64
 #define XIM_RESET_IC_REPLY		65
 #define XIM_PREEDIT_START		73
