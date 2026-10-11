@@ -915,9 +915,10 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 	size_t off = 0;
 
 	while (off + 6 <= len) {
-		weston_log("xim-server: PARSE off=%zu len=%zu avail=%zu\n",
-			   off, len, len);
-		uint16_t id = rd16(p + off, c->order);
+		weston_log("xim-server: PARSE off=%zu len=%zu id=%u f2=%u f4=%u f6=%u\n",
+			   off, len, rd16(p + off, c->order),
+			   rd16(p + off + 2, c->order), rd16(p + off + 4, c->order),
+			   (off + 8 <= len) ? rd16(p + off + 6, c->order) : 0);
 		uint16_t alen = rd16(p + off + 4, c->order);
 		const uint8_t *val = p + off + 6;
 
