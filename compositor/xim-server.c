@@ -1779,6 +1779,15 @@ xim_handle_events(int fd, uint32_t mask, void *data)
 				if (!c)
 					break;
 
+				{
+					char rh[80];
+					size_t ri;
+
+					rh[0] = 0;
+					for (ri = 0; ri < 20; ri++)
+						snprintf(rh + ri * 3, 4, "%02x ", (unsigned char)cm->data.data8[ri]);
+					weston_log("xim-server: RX [%s]\n", rh);
+				}
 				if (cm->format == 8)
 					xim_client_feed(c, cm->data.data8,
 							XIM_CM_DATA_SIZE);
