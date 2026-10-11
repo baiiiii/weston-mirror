@@ -914,12 +914,12 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 {
 	size_t off = 0;
 
-	while (off + 4 <= len) {
+	while (off + 6 <= len) {
 		uint16_t id = rd16(p + off, c->order);
-		uint16_t alen = rd16(p + off + 2, c->order);
-		const uint8_t *val = p + off + 4;
+		uint16_t alen = rd16(p + off + 4, c->order);
+		const uint8_t *val = p + off + 6;
 
-		if (off + 4 + alen > len)
+		if (off + 6 + alen > len)
 			break;
 
 		if (id == XIM_IC_ATTR_INPUT_STYLE && alen >= 4 &&
@@ -935,7 +935,7 @@ xim_parse_ic_values(struct xim_client *c, struct xim_ic *ic,
 				   alen);
 		}
 
-		off += 4 + alen + XIM_PAD(alen);
+		off += 6 + alen + XIM_PAD(alen);
 	}
 }
 
@@ -1202,7 +1202,7 @@ xim_on_create_ic(struct xim_client *c, const uint8_t *body, size_t len)
 		size_t o = 0, off = 0, n = 0;
 
 		ids[0] = '\0';
-		while (off + 4 <= bytes && n < 10) {
+		while (off + 6 <= bytes && n < 10) {
 			uint16_t id = rd16(body + 4 + off, c->order);
 			uint16_t alen = rd16(body + 4 + off + 2, c->order);
 
@@ -1210,7 +1210,7 @@ xim_on_create_ic(struct xim_client *c, const uint8_t *body, size_t len)
 				break;
 			o += (size_t)snprintf(ids + o, sizeof ids - o, "%s%u/%u",
 					      n ? "," : "", id, alen);
-			off += 4 + alen + XIM_PAD(alen);
+			off += 6 + alen + XIM_PAD(alen);
 			n++;
 		}
 		weston_log("xim-server: CREATE_IC attrs [%s]\n", ids);
